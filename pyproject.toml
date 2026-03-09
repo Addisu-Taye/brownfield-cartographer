@@ -1,0 +1,46 @@
+[project]
+name = "brownfield-cartographer"
+version = "0.1.0"
+description = "Automated Codebase Intelligence System for FDE Onboarding"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "tree-sitter>=0.23.0",
+    "tree-sitter-python>=0.23.0",
+    "tree-sitter-sql>=0.3.0",
+    "tree-sitter-yaml>=0.6.0",
+    "networkx>=3.2.0",
+    "pydantic>=2.5.0",
+    "gitpython>=3.1.0",
+    "rich>=13.0.0",
+    "click>=8.1.0",
+    "sqlglot>=20.0.0",
+    "langgraph>=0.0.20",
+    "langchain-core>=0.1.0",
+    "pytest>=7.4.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "black>=23.0.0",
+    "ruff>=0.1.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+# 🔧 ADD THIS SECTION - Tells hatchling where to find your code
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+# Optional: Exclude tests and artifacts from the wheel
+[tool.hatch.build]
+exclude = [
+    "/.git",
+    "/.cartography",
+    "/tests",
+    "/docs",
+    "*.md",
+]
