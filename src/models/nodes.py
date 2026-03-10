@@ -212,6 +212,13 @@ class TestNode(BaseNode):
     # Required fields
     path: str
     test_type: str  # unit, integration, data_quality, schema
+    change_velocity_90d: int = 0
+    total_commits: int = 0
+    is_entry_point: bool = False
+    is_test: bool = False
+    import_count: int = 0
+    pagerank_score: float = 0.0
+    in_circular_dependency: bool = False
     
     # Optional fields
     tests_what: List[str] = Field(default_factory=list)  # What modules/datasets this tests
@@ -222,6 +229,8 @@ class TestNode(BaseNode):
         self.type = NodeType.TEST
         if not self.id:
             self.id = f"test:{self.path}"
+            
+    
 
 
 # Edge model for graph relationships
