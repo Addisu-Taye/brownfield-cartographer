@@ -508,4 +508,3 @@ The tree-sitter and sqlglot communities for amazing tooling
 
 Built with ❤️ for Forward Deployed Engineers everywhere
 
-</div> ```
