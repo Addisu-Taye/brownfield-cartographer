@@ -490,6 +490,9 @@ class Hydrologist:
                 logger.debug(f"Error reading {file_path}: {e}")
                 continue
         
+        # Add dbt model outputs (fix for missing sinks)
+        self._add_dbt_model_outputs()
+        
         # Build graph from collected data
         self._build_lineage_graph()
         
@@ -497,6 +500,45 @@ class Hydrologist:
         self._print_summary()
         
         return self.lineage_graph
+    
+    def _add_dbt_model_outputs(self):
+        """Add dbt model outputs as datasets even without CREATE TABLE statements.
+        
+        In dbt, the model name itself is the output table, even though the SQL
+        just ends with SELECT. This method ensures those outputs are captured.
+        """
+        model_outputs = []
+        
+        # Look for SQL files that are likely dbt models
+        for trans_id, trans_info in self.transformations.items():
+            if trans_info['type'] == 'sql':
+                file_path = trans_info['file']
+                file_name = Path(file_path).stem  # Get filename without extension
+                
+                # Skip staging files (they have their own outputs)
+                if file_name.startswith('stg_'):
+                    continue
+                
+                # Check if this file doesn't already have writes
+                if not trans_info.get('writes'):
+                    # This is likely a dbt model output
+                    model_outputs.append((file_name, trans_id))
+        
+        # Add datasets and update transformations
+        for model_name, trans_id in model_outputs:
+            # Add as dataset if not exists
+            if model_name not in self.datasets:
+                self.datasets[model_name] = {
+                    'name': model_name,
+                    'type': 'table',
+                    'files': []
+                }
+                logger.debug(f"Added dbt model output: {model_name}")
+            
+            # Add to transformation writes
+            if model_name not in self.transformations[trans_id]['writes']:
+                self.transformations[trans_id]['writes'].append(model_name)
+                logger.debug(f"Added {model_name} as write output for {trans_id}")
     
     def _analyze_sql_file(self, file_path: Path, content: str):
         """Analyze SQL file for lineage."""
@@ -642,6 +684,7 @@ class Hydrologist:
                         type=EdgeType.CONSUMES
                     )
                     self.stats["edges_added"] += 1
+                    logger.debug(f"Edge: {read} -> {trans_id}")
             
             # Add edges from transformation to datasets (PRODUCES)
             for write in trans_info.get('writes', []):
@@ -652,6 +695,7 @@ class Hydrologist:
                         type=EdgeType.PRODUCES
                     )
                     self.stats["edges_added"] += 1
+                    logger.debug(f"Edge: {trans_id} -> {write}")
     
     def trace_lineage(self, dataset_name: str, direction: str = "upstream") -> List[str]:
         """Trace lineage upstream or downstream from a dataset."""
