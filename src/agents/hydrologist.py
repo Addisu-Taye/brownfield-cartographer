@@ -403,6 +403,31 @@ class Hydrologist:
     """
     
     def __init__(self, repo_path: str, cache_dir: Optional[Path] = None):
+        # ... rest of your Hydrologist class ...
+
+
+        """Agent 2: The Hydrologist - Data Flow & Lineage Analyst
+
+    Constructs the data lineage DAG by analyzing data sources, transformations, 
+    and sinks across all languages in the repo.
+    """
+
+import networkx as nx
+from pathlib import Path
+from typing import Dict, List, Optional, Set, Tuple, Any  # Make sure Optional is here
+import json
+from datetime import datetime
+import logging
+import re
+
+class Hydrologist:
+    """Agent 2: Data Flow & Lineage Analyst
+    
+    Constructs the data lineage DAG by analyzing data sources, transformations,
+    and sinks across all languages.
+    """
+    
+    def __init__(self, repo_path: str, cache_dir: Optional[Path] = None):
         self.repo_path = Path(repo_path).resolve()
         self.cache_dir = cache_dir or self.repo_path / ".cartography"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -752,11 +777,15 @@ class Hydrologist:
         return sinks
     
     def save_lineage_graph(self, output_path: Optional[Path] = None):
-        """Save lineage graph to JSON."""
+        """Save lineage graph to JSON with sources and sinks."""
         if output_path is None:
             output_path = self.cache_dir / "lineage_graph.json"
         
         output_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        # Calculate sources and sinks
+        sources = self.find_sources()
+        sinks = self.find_sinks()
         
         # Convert NetworkX graph to serializable format
         graph_data = nx.node_link_data(self.lineage_graph)
@@ -769,13 +798,15 @@ class Hydrologist:
             },
             "graph": graph_data,
             "datasets": self.datasets,
-            "transformations": self.transformations
+            "transformations": self.transformations,
+            "sources": sources,
+            "sinks": sinks
         }
         
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             json.dump(output, f, indent=2, default=str)
         
-        logger.info(f"💾 Lineage graph saved to {output_path}")
+        logger.info(f"💾 Lineage graph saved to {output_path} with {len(sources)} sources and {len(sinks)} sinks")
     
     def _print_summary(self):
         """Print analysis summary."""
