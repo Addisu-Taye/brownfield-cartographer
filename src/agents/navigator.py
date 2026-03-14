@@ -1,5 +1,5 @@
 """Navigator Agent - Query Interface for Knowledge Graph
-Addisu Taye
+
 A LangGraph agent with tools for querying the codebase knowledge graph.
 """
 
@@ -40,12 +40,19 @@ class Navigator:
         self.module_graph = None
         self.lineage_graph = None
         self.semantic_index = None
+        self.datasets = {}
+        self.transformations = {}
         
         self._load_graphs()
         
         self.stats = {
             "queries_executed": 0,
-            "tools_used": {}
+            "tools_used": {
+                "find_implementation": 0,
+                "trace_lineage": 0,
+                "blast_radius": 0,
+                "explain_module": 0
+            }
         }
     
     def _load_graphs(self):
@@ -53,38 +60,50 @@ class Navigator:
         # Load module graph
         module_path = self.cache_dir / "module_graph.json"
         if module_path.exists():
-            with open(module_path) as f:
-                data = json.load(f)
-                if "graph" in data:
-                    self.module_graph = json_graph.node_link_graph(data["graph"])
-                logger.info(f"Loaded module graph with {len(self.module_graph.nodes)} nodes")
+            try:
+                with open(module_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if "graph" in data:
+                        self.module_graph = json_graph.node_link_graph(data["graph"])
+                    self.module_nodes = data.get("nodes", {})
+                logger.info(f"Loaded module graph with {len(self.module_graph.nodes) if self.module_graph else 0} nodes")
+            except Exception as e:
+                logger.error(f"Error loading module graph: {e}")
         
         # Load lineage graph
         lineage_path = self.cache_dir / "lineage_graph.json"
         if lineage_path.exists():
-            with open(lineage_path) as f:
-                data = json.load(f)
-                if "graph" in data:
-                    self.lineage_graph = json_graph.node_link_graph(data["graph"])
-                self.datasets = data.get("datasets", {})
-                self.transformations = data.get("transformations", {})
-                logger.info(f"Loaded lineage graph with {len(self.lineage_graph.nodes)} nodes")
+            try:
+                with open(lineage_path, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    if "graph" in data:
+                        self.lineage_graph = json_graph.node_link_graph(data["graph"])
+                    self.datasets = data.get("datasets", {})
+                    self.transformations = data.get("transformations", {})
+                    self.sources = data.get("sources", [])
+                    self.sinks = data.get("sinks", [])
+                logger.info(f"Loaded lineage graph with {len(self.lineage_graph.nodes) if self.lineage_graph else 0} nodes")
+            except Exception as e:
+                logger.error(f"Error loading lineage graph: {e}")
         
         # Load semantic index
         semantic_path = self.cache_dir / "semantic_index.json"
         if semantic_path.exists():
-            with open(semantic_path) as f:
-                self.semantic_index = json.load(f)
-                logger.info(f"Loaded semantic index")
+            try:
+                with open(semantic_path, 'r', encoding='utf-8') as f:
+                    self.semantic_index = json.load(f)
+                logger.info(f"Loaded semantic index with {len(self.semantic_index.get('purpose_statements', {}))} statements")
+            except Exception as e:
+                logger.error(f"Error loading semantic index: {e}")
     
     def find_implementation(self, concept: str) -> List[Dict[str, Any]]:
         """Find implementation of a concept using semantic search."""
         self.stats["queries_executed"] += 1
-        self.stats["tools_used"]["find_implementation"] = self.stats["tools_used"].get("find_implementation", 0) + 1
+        self.stats["tools_used"]["find_implementation"] += 1
         
         results = []
         
-        # Simple keyword search (in production, use embeddings)
+        # Search in semantic index
         if self.semantic_index:
             purposes = self.semantic_index.get("purpose_statements", {})
             for module, purpose in purposes.items():
@@ -96,147 +115,253 @@ class Navigator:
                         "evidence": f"Semantic match in purpose statement"
                     })
         
-        # Also search in datasets
-        if hasattr(self, 'datasets'):
-            for dataset in self.datasets:
-                if concept.lower() in dataset.lower():
-                    results.append({
-                        "dataset": dataset,
-                        "type": "dataset",
-                        "evidence": f"Dataset name match"
-                    })
+        # Search in datasets
+        for dataset in self.datasets:
+            if concept.lower() in dataset.lower():
+                results.append({
+                    "dataset": dataset,
+                    "type": "dataset",
+                    "evidence": f"Dataset name match"
+                })
         
         return results[:10]  # Return top 10
     
     def trace_lineage(self, dataset: str, direction: str = "upstream") -> Dict[str, Any]:
         """Trace lineage upstream or downstream from a dataset."""
         self.stats["queries_executed"] += 1
-        self.stats["tools_used"]["trace_lineage"] = self.stats["tools_used"].get("trace_lineage", 0) + 1
+        self.stats["tools_used"]["trace_lineage"] += 1
         
         if not self.lineage_graph:
             return {"error": "Lineage graph not loaded"}
         
-        node_id = f"dataset:{dataset}"
-        if node_id not in self.lineage_graph:
+        # Find the dataset node (case-insensitive)
+        node_id = None
+        for node in self.lineage_graph.nodes():
+            if node.startswith("dataset:") and node[8:].lower() == dataset.lower():
+                node_id = node
+                break
+        
+        if not node_id:
             return {"error": f"Dataset '{dataset}' not found"}
         
         result = {
             "dataset": dataset,
             "direction": direction,
-            "path": [],
+            "upstream": [],
+            "downstream": [],
             "files": []
         }
         
-        if direction == "upstream":
-            # Find ancestors (what feeds into this)
-            ancestors = nx.ancestors(self.lineage_graph, node_id)
-            for anc in ancestors:
-                if anc.startswith("dataset:"):
-                    result["path"].append(anc.replace("dataset:", ""))
-                elif anc.startswith("trans:"):
-                    # Find the file for this transformation
-                    trans_id = anc.replace("trans:", "")
-                    if trans_id in self.transformations:
-                        result["files"].append({
-                            "file": self.transformations[trans_id].get("file"),
-                            "type": "transformation"
-                        })
-        else:
-            # Find descendants (what depends on this)
-            descendants = nx.descendants(self.lineage_graph, node_id)
-            for desc in descendants:
-                if desc.startswith("dataset:"):
-                    result["path"].append(desc.replace("dataset:", ""))
-                elif desc.startswith("trans:"):
-                    trans_id = desc.replace("trans:", "")
-                    if trans_id in self.transformations:
-                        result["files"].append({
-                            "file": self.transformations[trans_id].get("file"),
-                            "type": "transformation"
-                        })
+        try:
+            if direction == "upstream" or direction == "both":
+                # Find ancestors (what feeds into this)
+                ancestors = nx.ancestors(self.lineage_graph, node_id)
+                for anc in ancestors:
+                    if anc.startswith("dataset:"):
+                        result["upstream"].append(anc.replace("dataset:", ""))
+                    elif anc.startswith("trans:"):
+                        trans_id = anc.replace("trans:", "")
+                        if trans_id in self.transformations:
+                            result["files"].append({
+                                "file": self.transformations[trans_id].get("file"),
+                                "type": "transformation",
+                                "relation": "upstream"
+                            })
+            
+            if direction == "downstream" or direction == "both":
+                # Find descendants (what depends on this)
+                descendants = nx.descendants(self.lineage_graph, node_id)
+                for desc in descendants:
+                    if desc.startswith("dataset:"):
+                        result["downstream"].append(desc.replace("dataset:", ""))
+                    elif desc.startswith("trans:"):
+                        trans_id = desc.replace("trans:", "")
+                        if trans_id in self.transformations:
+                            result["files"].append({
+                                "file": self.transformations[trans_id].get("file"),
+                                "type": "transformation",
+                                "relation": "downstream"
+                            })
+        except Exception as e:
+            logger.error(f"Error traversing graph: {e}")
         
         return result
-    
+        
     def blast_radius(self, module_path: str) -> Dict[str, Any]:
         """Calculate blast radius if a module changes."""
         self.stats["queries_executed"] += 1
-        self.stats["tools_used"]["blast_radius"] = self.stats["tools_used"].get("blast_radius", 0) + 1
+        self.stats["tools_used"]["blast_radius"] += 1
         
-        if not self.module_graph:
-            return {"error": "Module graph not loaded"}
-        
-        if module_path not in self.module_graph:
-            return {"error": f"Module '{module_path}' not found"}
-        
-        # Find all downstream dependents (modules that import this)
-        dependents = []
-        for node in nx.descendants(self.module_graph, module_path):
-            # Check if this node imports our module
-            if self.module_graph.has_edge(node, module_path):
-                dependents.append(node)
-        
-        # Also check lineage impact if available
-        dataset_impact = []
-        if self.lineage_graph and hasattr(self, 'datasets'):
-            # Find datasets that might be affected
-            for dataset in self.datasets:
-                if module_path in self.datasets[dataset].get("files", []):
-                    dataset_impact.append(dataset)
-        
-        return {
+        result = {
             "module": module_path,
-            "direct_dependents": len(dependents),
-            "dependents": dependents[:10],
-            "datasets_affected": dataset_impact[:10],
-            "total_impact": len(dependents) + len(dataset_impact)
-        }
-    
-    def explain_module(self, module_path: str) -> Dict[str, Any]:
-        """Explain what a module does using semantic data."""
-        self.stats["queries_executed"] += 1
-        self.stats["tools_used"]["explain_module"] = self.stats["tools_used"].get("explain_module", 0) + 1
-        
-        explanation = {
-            "module": module_path,
-            "purpose": "No semantic data available",
-            "dependencies": [],
+            "direct_dependents": 0,
             "dependents": [],
-            "datasets": []
+            "datasets_affected": [],
+            "transformations_affected": [],
+            "total_impact": 0
         }
         
-        # Get purpose from semantic index
-        if self.semantic_index:
-            purposes = self.semantic_index.get("purpose_statements", {})
-            if module_path in purposes:
-                explanation["purpose"] = purposes[module_path]
-            
-            # Check for documentation drift
-            drift = self.semantic_index.get("doc_drift_flags", {})
-            if module_path in drift:
-                explanation["doc_drift"] = drift[module_path]
-            
-            # Get domain cluster
-            domains = self.semantic_index.get("domain_clusters", {})
-            if module_path in domains:
-                explanation["domain"] = domains[module_path]
+        # Extract module name for matching
+        module_name = Path(module_path).name
+        module_stem = Path(module_path).stem
         
-        # Get dependencies from module graph
-        if self.module_graph and module_path in self.module_graph:
-            # What this module imports
-            deps = list(self.module_graph.successors(module_path))
-            explanation["dependencies"] = deps[:10]
-            
-            # What imports this module
-            dependents = list(self.module_graph.predecessors(module_path))
-            explanation["dependents"] = dependents[:10]
+        logger.info(f"Calculating blast radius for {module_path}")
         
-        # Get datasets this module affects
-        if hasattr(self, 'datasets'):
+        # Find all transformations that involve this module
+        affected_transformations = set()
+        starting_datasets = set()
+        
+        for trans_id, trans_info in self.transformations.items():
+            trans_file = trans_info.get('file', '')
+            
+            # Check if this transformation is the module itself or uses it
+            if (module_path in trans_file or 
+                module_name in trans_file or 
+                module_stem in trans_file):
+                affected_transformations.add(trans_id)
+                
+                # Add datasets this transformation produces
+                for write_dataset in trans_info.get('writes', []):
+                    starting_datasets.add(write_dataset)
+                    logger.info(f"Starting dataset: {write_dataset}")
+                
+                # Also consider that this transformation might produce a dataset
+                # with the same name as the stem
+                if module_stem.startswith('stg_'):
+                    starting_datasets.add(module_stem)
+        
+        result["transformations_affected"] = list(affected_transformations)
+        
+        # Find all downstream datasets using BFS
+        all_affected_datasets = set(starting_datasets)
+        
+        if self.lineage_graph:
+            # Do a BFS from each starting dataset to find all downstream datasets
+            from collections import deque
+            
+            for start_dataset in starting_datasets:
+                node_id = f"dataset:{start_dataset}"
+                if node_id not in self.lineage_graph:
+                    continue
+                
+                # BFS to find all downstream datasets
+                visited = set()
+                queue = deque([node_id])
+                
+                while queue:
+                    current = queue.popleft()
+                    if current in visited:
+                        continue
+                    visited.add(current)
+                    
+                    # Add to affected datasets if it's a dataset node
+                    if current.startswith("dataset:") and current != node_id:
+                        all_affected_datasets.add(current.replace("dataset:", ""))
+                    
+                    # Follow all outgoing edges (downstream)
+                    for successor in self.lineage_graph.successors(current):
+                        if successor not in visited:
+                            queue.append(successor)
+        
+        # Also check transformations that read from our datasets
+        # This is a fallback in case the graph edges are missing
+        for trans_id, trans_info in self.transformations.items():
+            for read_dataset in trans_info.get('reads', []):
+                if read_dataset in starting_datasets:
+                    # This transformation reads from our dataset
+                    for write_dataset in trans_info.get('writes', []):
+                        all_affected_datasets.add(write_dataset)
+                        logger.info(f"Found via transformation read: {read_dataset} -> {write_dataset}")
+        
+        result["datasets_affected"] = list(all_affected_datasets)
+        
+        # Find code dependents from module graph
+        if self.module_graph:
+            for node in self.module_graph.nodes():
+                if module_path in node or module_name in node or module_stem in node:
+                    try:
+                        dependents = list(self.module_graph.predecessors(node))
+                        result["dependents"] = dependents[:10]
+                        result["direct_dependents"] = len(dependents)
+                    except Exception as e:
+                        logger.error(f"Error finding dependents: {e}")
+                    break
+        
+        # Calculate total impact
+        all_affected = set(result["dependents"]) | set(result["datasets_affected"]) | set(result["transformations_affected"])
+        result["total_impact"] = len(all_affected)
+        
+        return result
+            
+        def explain_module(self, module_path: str) -> Dict[str, Any]:
+            """Explain what a module does using semantic data."""
+            self.stats["queries_executed"] += 1
+            self.stats["tools_used"]["explain_module"] += 1
+            
+            explanation = {
+                "module": module_path,
+                "purpose": "No semantic data available",
+                "dependencies": [],
+                "dependents": [],
+                "datasets": []
+            }
+            
+            # Get purpose from semantic index
+            if self.semantic_index:
+                purposes = self.semantic_index.get("purpose_statements", {})
+                
+                # Try exact match
+                if module_path in purposes:
+                    explanation["purpose"] = purposes[module_path]
+                else:
+                    # Try partial match
+                    for path, purpose in purposes.items():
+                        if module_path in path or path in module_path:
+                            explanation["purpose"] = purpose
+                            explanation["matched_path"] = path
+                            break
+                
+                # Check for documentation drift
+                drift = self.semantic_index.get("doc_drift_flags", {})
+                for path, drifted in drift.items():
+                    if module_path in path or path in module_path:
+                        explanation["doc_drift"] = drifted
+                        break
+                
+                # Get domain cluster
+                domains = self.semantic_index.get("domain_clusters", {})
+                for path, domain in domains.items():
+                    if module_path in path or path in module_path:
+                        explanation["domain"] = domain
+                        break
+            
+            # Get dependencies from module graph
+            if self.module_graph:
+                # Find the module in the graph
+                found_module = None
+                for node in self.module_graph.nodes():
+                    if module_path in node or node in module_path:
+                        found_module = node
+                        break
+                
+                if found_module:
+                    # What this module imports (successors)
+                    deps = list(self.module_graph.successors(found_module))
+                    explanation["dependencies"] = deps[:10]
+                    
+                    # What imports this module (predecessors)
+                    dependents = list(self.module_graph.predecessors(found_module))
+                    explanation["dependents"] = dependents[:10]
+            
+            # Get datasets this module affects
             for dataset, info in self.datasets.items():
-                if module_path in info.get("files", []):
-                    explanation["datasets"].append(dataset)
-        
-        return explanation
+                files = info.get("files", [])
+                for f in files:
+                    if module_path in f or (found_module and found_module in f):
+                        explanation["datasets"].append(dataset)
+                        break
+            
+            return explanation
     
     def query(self, question: str) -> Dict[str, Any]:
         """Natural language query interface."""
@@ -244,53 +369,65 @@ class Navigator:
         
         question_lower = question.lower()
         
-        # Route to appropriate tool based on keywords
-        if "find" in question_lower or "where is" in question_lower or "implementation" in question_lower:
-            # Extract concept (simple heuristic)
-            words = question.split()
-            concept = words[-1] if words else ""
-            return {
-                "tool": "find_implementation",
-                "result": self.find_implementation(concept)
-            }
+        # Parse lineage queries
+        if "lineage" in question_lower or "trace" in question_lower:
+            import re
+            
+            # Pattern 1: "trace lineage of customers"
+            match = re.search(r"(?:trace\s+)?lineage\s+(?:of\s+)?['\"]?(\w+)['\"]?", question_lower)
+            if match:
+                dataset = match.group(1)
+                direction = "downstream" if "downstream" in question_lower else "upstream"
+                return {
+                    "tool": "trace_lineage",
+                    "result": self.trace_lineage(dataset, direction)
+                }
+            
+            # Pattern 2: "lineage customers"
+            match = re.search(r"lineage\s+(\w+)", question_lower)
+            if match:
+                dataset = match.group(1)
+                return {
+                    "tool": "trace_lineage",
+                    "result": self.trace_lineage(dataset)
+                }
         
-        elif "lineage" in question_lower or "trace" in question_lower or "upstream" in question_lower:
-            # Extract dataset name
-            words = question.split()
-            for i, word in enumerate(words):
-                if word in ["of", "for", "trace", "lineage"] and i+1 < len(words):
-                    dataset = words[i+1].strip('?.')
-                    direction = "upstream" if "upstream" in question_lower else "downstream"
-                    return {
-                        "tool": "trace_lineage",
-                        "result": self.trace_lineage(dataset, direction)
-                    }
+        # Parse find queries
+        elif "find" in question_lower or "where is" in question_lower or "search" in question_lower:
+            import re
+            match = re.search(r"(?:find|where is|search for?)\s+['\"]?(.+)['\"]?", question_lower)
+            if match:
+                concept = match.group(1)
+                return {
+                    "tool": "find_implementation",
+                    "result": self.find_implementation(concept)
+                }
         
+        # Parse blast radius queries
         elif "blast" in question_lower or "radius" in question_lower or "impact" in question_lower:
-            # Extract module path
-            words = question.split()
-            for i, word in enumerate(words):
-                if word in ["of", "if", "module"] and i+1 < len(words):
-                    module = words[i+1].strip('?.')
-                    return {
-                        "tool": "blast_radius",
-                        "result": self.blast_radius(module)
-                    }
+            import re
+            match = re.search(r"(?:blast|impact)(?:\s+radius)?\s+(?:of\s+)?['\"]?(.+)['\"]?", question_lower)
+            if match:
+                module = match.group(1)
+                return {
+                    "tool": "blast_radius",
+                    "result": self.blast_radius(module)
+                }
         
-        elif "explain" in question_lower or "what does" in question_lower:
-            # Extract module path
-            words = question.split()
-            for i, word in enumerate(words):
-                if word in ["explain", "module"] and i+1 < len(words):
-                    module = words[i+1].strip('?.')
-                    return {
-                        "tool": "explain_module",
-                        "result": self.explain_module(module)
-                    }
+        # Parse explain queries
+        elif "explain" in question_lower or "what does" in question_lower or "describe" in question_lower:
+            import re
+            match = re.search(r"(?:explain|what does|describe)\s+['\"]?(.+)['\"]?", question_lower)
+            if match:
+                module = match.group(1)
+                return {
+                    "tool": "explain_module",
+                    "result": self.explain_module(module)
+                }
         
         return {
             "tool": "unknown",
-            "result": "I couldn't understand the query. Try: find X, trace lineage of Y, blast radius of Z, explain module M"
+            "result": "I couldn't understand the query. Try:\n- find customer logic\n- trace lineage of customers\n- blast radius of stg_orders\n- explain models/customers.sql"
         }
     
     def interactive_mode(self):
@@ -301,8 +438,8 @@ class Navigator:
         print("\nAvailable commands:")
         print("  find <concept>           - Find implementation of concept")
         print("  lineage <dataset>        - Trace lineage of dataset")
-        print("  blast <module>            - Calculate blast radius")
-        print("  explain <module>          - Explain module purpose")
+        print("  blast <module>           - Calculate blast radius")
+        print("  explain <module>         - Explain module purpose")
         print("  quit                      - Exit")
         print("-"*60)
         
