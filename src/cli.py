@@ -17,7 +17,14 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.orchestrator import Orchestrator
+from dotenv import load_dotenv
+from pathlib import Path
 
+# Load .env file from project root
+env_path = Path(__file__).parent.parent / '.env'
+if env_path.exists():
+    load_dotenv(env_path)
+    print(f"📄 Loaded environment from {env_path}")
 
 @click.group()
 def cli():
