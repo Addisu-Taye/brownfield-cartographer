@@ -38,6 +38,7 @@ class ModuleNode(BaseNode):
     # Required fields
     path: str
     language: str = "unknown"
+    type: NodeType = NodeType.MODULE  # Add this line
     
     # Optional fields with defaults
     imports: List[str] = Field(default_factory=list)
@@ -57,14 +58,14 @@ class ModuleNode(BaseNode):
     is_dead_code_candidate: bool = False
     is_entry_point: bool = False
     is_test: bool = False
-    import_count: int = 0  # Number of times this module is imported
+    import_count: int = 0
     pagerank_score: float = 0.0
     in_circular_dependency: bool = False
     
     # Documentation
     docstring: Optional[str] = None
     has_docstring: bool = False
-    docstring_drift: bool = False  # Flag if docstring contradicts code
+    docstring_drift: bool = False
     
     # Additional metadata
     metadata: Dict[str, Any] = Field(default_factory=dict)
@@ -72,12 +73,9 @@ class ModuleNode(BaseNode):
     def __init__(self, **data):
         super().__init__(**data)
         self.type = NodeType.MODULE
-        # Generate ID from path if not provided
         if not self.id:
             self.id = f"module:{self.path}"
-        # Check if docstring exists
         self.has_docstring = bool(self.docstring)
-
 
 class FunctionNode(BaseNode):
     """Represents a function or method in the codebase."""
