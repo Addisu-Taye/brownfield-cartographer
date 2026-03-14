@@ -10,49 +10,40 @@ import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
-import hashlib
+from datetime import datetime
 
-# Models
+# Import models
 from src.models.nodes import ModuleNode, FunctionNode, KnowledgeGraph
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-
-# Optional LLM imports
+# LLM availability
 try:
     from openai import OpenAI
     OPENAI_AVAILABLE = True
-except Exception:
+except ImportError:
     OPENAI_AVAILABLE = False
-    logger.warning("OpenAI SDK not installed. LLM functionality disabled.")
+    logger.warning("openai not installed. LLM features will be disabled.")
 
-
-# Optional embedding imports
+# Embeddings availability
 try:
     from sentence_transformers import SentenceTransformer
-    import numpy as np
     from sklearn.cluster import KMeans
     EMBEDDINGS_AVAILABLE = True
-except Exception:
+except ImportError:
     EMBEDDINGS_AVAILABLE = False
-    logger.warning("Sentence-transformers not installed. Domain clustering disabled.")
+    logger.warning("sentence-transformers not installed. Clustering disabled.")
 
-
-# -------------------------------------------------------------------
-# Context Budget Tracker
-# -------------------------------------------------------------------
 
 class ContextWindowBudget:
-    """Tracks token usage and estimated cost."""
+    """Track token usage and cost."""
 
     def __init__(self, model_pricing: Optional[Dict[str, float]] = None):
         self.model_pricing = model_pricing or {
-            "gpt-4o-mini": 0.00015,
             "gpt-4": 0.03,
-            "mistral": 0.0002,
+            "gpt-3.5-turbo": 0.0015,
         }
-
         self.total_tokens = 0
         self.total_cost = 0.0
         self.calls_made = 0
@@ -60,34 +51,29 @@ class ContextWindowBudget:
     def estimate_tokens(self, text: str) -> int:
         return len(text) // 4
 
-    def track_call(self, model: str, tokens: int):
+    def select_model(self, token_count: int, task: str = "bulk") -> str:
+        if task == "synthesis":
+            return "gpt-4"
+        return "gpt-3.5-turbo"
 
+    def track_call(self, model: str, tokens: int):
         self.calls_made += 1
         self.total_tokens += tokens
-
-        cost_per_k = self.model_pricing.get(model, 0.0001)
+        cost_per_k = self.model_pricing.get(model, 0.001)
         self.total_cost += (tokens / 1000) * cost_per_k
 
-    def get_summary(self):
-
+    def get_summary(self) -> Dict[str, Any]:
         return {
-            "calls": self.calls_made,
-            "tokens": self.total_tokens,
-            "cost_usd": round(self.total_cost, 4),
+            "total_calls": self.calls_made,
+            "total_tokens": self.total_tokens,
+            "total_cost_usd": round(self.total_cost, 4),
         }
 
 
-# -------------------------------------------------------------------
-# Agent 3 – Semanticist
-# -------------------------------------------------------------------
-
 class Semanticist:
-    """
-    Agent 3: LLM-Powered Purpose Analyst
-    """
+    """Agent 3: LLM-powered semantic analyzer."""
 
     def __init__(self, repo_path: str, cache_dir: Optional[Path] = None):
-
         self.repo_path = Path(repo_path).resolve()
         self.cache_dir = cache_dir or self.repo_path / ".cartography"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -97,7 +83,7 @@ class Semanticist:
         self.purpose_statements: Dict[str, str] = {}
         self.doc_drift_flags: Dict[str, bool] = {}
         self.domain_clusters: Dict[str, str] = {}
-        self.embeddings: Dict[str, List[float]] = {}
+        self.day_one_answers: Dict[str, str] = {}
 
         self.stats = {
             "modules_analyzed": 0,
@@ -107,305 +93,232 @@ class Semanticist:
             "llm_calls": 0,
         }
 
-        self._load_module_data()
-
         self.client = None
         if OPENAI_AVAILABLE:
-
             api_key = os.getenv("OPENAI_API_KEY")
-
             if api_key:
-                self.client = OpenAI(api_key=api_key)
-                logger.info("OpenAI client initialized")
-            else:
-                logger.warning("OPENAI_API_KEY not set")
+                try:
+                    self.client = OpenAI(api_key=api_key)
+                    logger.info("OpenAI client initialized")
+                except Exception as e:
+                    logger.warning(f"OpenAI initialization failed: {e}")
 
         self.embedding_model = None
         if EMBEDDINGS_AVAILABLE:
-
             try:
                 self.embedding_model = SentenceTransformer("all-MiniLM-L6-v2")
-                logger.info("Embedding model loaded")
-
             except Exception as e:
-                logger.warning(f"Embedding model failed: {e}")
+                logger.warning(f"Embedding model load failed: {e}")
 
-    # -------------------------------------------------------------------
-    # Load module data
-    # -------------------------------------------------------------------
+        self._load_module_data()
 
     def _load_module_data(self):
-
-        module_graph_path = self.cache_dir / "module_graph.json"
-
-        if not module_graph_path.exists():
-            logger.warning("Module graph not found. Run Surveyor first.")
+        module_graph = self.cache_dir / "module_graph.json"
+        if module_graph.exists():
+            try:
+                with open(module_graph) as f:
+                    data = json.load(f)
+                self.module_data = data.get("nodes", {})
+                logger.info(f"Loaded {len(self.module_data)} modules")
+            except Exception as e:
+                logger.error(e)
+                self.module_data = {}
+        else:
             self.module_data = {}
-            return
-
-        try:
-
-            with open(module_graph_path) as f:
-                data = json.load(f)
-
-            self.module_data = data.get("nodes", {})
-            logger.info(f"Loaded {len(self.module_data)} modules")
-
-        except Exception as e:
-
-            logger.error(f"Module load failed: {e}")
-            self.module_data = {}
-
-    # -------------------------------------------------------------------
-    # Purpose Statement
-    # -------------------------------------------------------------------
 
     def generate_purpose_statement(
-        self,
-        module_path: str,
-        code: str,
-        docstring: Optional[str] = None,
+        self, module_path: str, code: str, docstring: Optional[str] = None
     ) -> str:
 
         if not self.client:
-            return "LLM unavailable"
+            return "LLM not available"
 
         if len(code) > 4000:
-            code = code[:4000] + "\n...truncated..."
+            code = code[:4000]
 
         prompt = f"""
-You are a senior software architect analyzing a production codebase.
+You are analyzing a code file.
 
-File:
-{module_path}
+File: {module_path}
 
 Code:
 {code}
 
-Original docstring:
+Docstring:
 {docstring or "None"}
 
-Write a concise 2–3 sentence purpose statement describing:
-
-• What business function this module performs  
-• Inputs and outputs  
-• Why it exists in the system
-
-Focus on WHAT and WHY — not implementation details.
+Write a short 2 sentence description of the business purpose.
+Focus on WHAT the module does and WHY it exists.
 """
 
         tokens = self.budget.estimate_tokens(prompt)
+        model = self.budget.select_model(tokens)
 
         try:
-
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model=model,
                 messages=[
-                    {"role": "system", "content": "Expert software architect"},
+                    {"role": "system", "content": "Code analyst"},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.2,
+                temperature=0.3,
+                max_tokens=150,
             )
 
-            result = response.choices[0].message.content.strip()
+            purpose = response.choices[0].message.content.strip()
 
-            self.budget.track_call("gpt-4o-mini", tokens)
-
+            self.budget.track_call(model, tokens + 50)
             self.stats["purpose_statements_generated"] += 1
             self.stats["llm_calls"] += 1
 
-            return result
+            self.purpose_statements[module_path] = purpose
+
+            if docstring:
+                self._check_doc_drift(module_path, docstring, purpose)
+
+            return purpose
 
         except Exception as e:
-
-            logger.error(f"Purpose generation failed: {e}")
+            logger.error(e)
             return "Purpose generation failed"
 
-    # -------------------------------------------------------------------
-    # Documentation Drift
-    # -------------------------------------------------------------------
-
-    def detect_doc_drift(self, docstring: str, purpose: str) -> bool:
+    def _check_doc_drift(self, module_path: str, docstring: str, purpose: str):
 
         if not self.client:
-            return False
+            return
 
         prompt = f"""
-Compare the documentation with the real module purpose.
-
 Docstring:
 {docstring}
 
 Actual purpose:
 {purpose}
 
-Does the docstring accurately describe the module?
-
+Does the docstring match the code?
 Answer YES or NO.
 """
 
-        tokens = self.budget.estimate_tokens(prompt)
-
         try:
-
             response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
+                model="gpt-3.5-turbo",
                 messages=[{"role": "user", "content": prompt}],
+                temperature=0,
+                max_tokens=20,
             )
 
-            answer = response.choices[0].message.content.upper()
+            answer = response.choices[0].message.content.strip().upper()
 
-            drift = "NO" in answer
+            drift = answer.startswith("NO")
+            self.doc_drift_flags[module_path] = drift
 
             if drift:
                 self.stats["doc_drift_detected"] += 1
 
-            self.budget.track_call("gpt-4o-mini", tokens)
+        except Exception as e:
+            logger.error(e)
 
-            return drift
-
-        except Exception:
-
-            return False
-
-    # -------------------------------------------------------------------
-    # Embedding Generation
-    # -------------------------------------------------------------------
-
-    def compute_embeddings(self):
+    def compute_embeddings(self, texts: List[str]):
 
         if not self.embedding_model:
-            return
-
-        texts = list(self.purpose_statements.values())
-
-        if not texts:
-            return
-
-        vectors = self.embedding_model.encode(texts)
-
-        for module, vec in zip(self.purpose_statements.keys(), vectors):
-            self.embeddings[module] = vec.tolist()
-
-    # -------------------------------------------------------------------
-    # Domain Clustering
-    # -------------------------------------------------------------------
-
-    def cluster_domains(self, k: int = 5):
-
-        if not EMBEDDINGS_AVAILABLE:
-            return
-
-        if not self.embeddings:
-            return
-
-        modules = list(self.embeddings.keys())
-
-        vectors = np.array(list(self.embeddings.values()))
-
-        kmeans = KMeans(n_clusters=min(k, len(vectors)))
-        labels = kmeans.fit_predict(vectors)
-
-        for module, label in zip(modules, labels):
-            self.domain_clusters[module] = f"domain_{label}"
-
-        self.stats["domains_identified"] = len(set(labels))
-
-    # -------------------------------------------------------------------
-    # FDE Questions
-    # -------------------------------------------------------------------
-
-    def generate_fde_questions(self, surveyor_data: Dict, lineage_data: Dict) -> str:
-
-        if not self.client:
-            return "LLM unavailable"
-
-        prompt = f"""
-You are a Forward Deployed Engineer analyzing a codebase.
-
-Modules:
-{list(surveyor_data.get("nodes", {}).keys())}
-
-Sources:
-{lineage_data.get("sources", [])}
-
-Sinks:
-{lineage_data.get("sinks", [])}
-
-Answer these:
-
-1. Primary ingestion path
-2. Critical outputs
-3. Failure blast radius
-4. Where business logic lives
-5. What changed most recently
-
-Cite modules.
-"""
+            return []
 
         try:
+            return self.embedding_model.encode(texts).tolist()
+        except Exception as e:
+            logger.error(e)
+            return []
 
-            response = self.client.chat.completions.create(
-                model="gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
-            )
+    def cluster_into_domains(self, n_clusters: int = 5):
 
-            return response.choices[0].message.content
+        if not self.embedding_model or not self.purpose_statements:
+            return {}
+
+        modules = list(self.purpose_statements.keys())
+        purposes = list(self.purpose_statements.values())
+
+        embeddings = self.compute_embeddings(purposes)
+
+        if not embeddings:
+            return {}
+
+        if len(modules) < n_clusters:
+            n_clusters = max(2, len(modules) // 2)
+
+        try:
+            kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+            labels = kmeans.fit_predict(embeddings)
+
+            domain_names = [f"Domain_{i}" for i in range(n_clusters)]
+
+            for i, module in enumerate(modules):
+                self.domain_clusters[module] = domain_names[labels[i]]
+
+            self.stats["domains_identified"] = len(domain_names)
+
+            return self.domain_clusters
 
         except Exception as e:
-
             logger.error(e)
-            return "FDE analysis failed"
+            return {}
 
-    # -------------------------------------------------------------------
-    # Main Analysis
-    # -------------------------------------------------------------------
+    def analyze_module(self, module_path: str, code: str, docstring=None):
 
-    def analyze(self):
-
-        logger.info("Running Semanticist analysis...")
-
-        for module_path, module_data in self.module_data.items():
-
-            code = module_data.get("code", "")
-            docstring = module_data.get("docstring")
-
-            purpose = self.generate_purpose_statement(
-                module_path,
-                code,
-                docstring,
-            )
-
-            self.purpose_statements[module_path] = purpose
-
-            if docstring:
-                drift = self.detect_doc_drift(docstring, purpose)
-                self.doc_drift_flags[module_path] = drift
-
-        self.compute_embeddings()
-        self.cluster_domains()
-
-        self.stats["modules_analyzed"] = len(self.module_data)
-
-        logger.info("Semantic analysis completed")
-
-    # -------------------------------------------------------------------
-    # Save Results
-    # -------------------------------------------------------------------
-
-    def save_results(self):
-
-        output = {
-            "purpose_statements": self.purpose_statements,
-            "doc_drift": self.doc_drift_flags,
-            "domain_clusters": self.domain_clusters,
-            "stats": self.stats,
-            "budget": self.budget.get_summary(),
+        result = {
+            "path": module_path,
+            "purpose": self.generate_purpose_statement(module_path, code, docstring),
+            "docstring": docstring,
+            "doc_drift": self.doc_drift_flags.get(module_path, False),
+            "domain": self.domain_clusters.get(module_path, "unknown"),
         }
 
-        path = self.cache_dir / "semantic_analysis.json"
+        self.stats["modules_analyzed"] += 1
+
+        return result
+
+    def save_semantic_index(self):
+
+        output = {
+            "metadata": {
+                "generated_at": datetime.now().isoformat(),
+                "stats": self.stats,
+                "budget": self.budget.get_summary(),
+            },
+            "purpose_statements": self.purpose_statements,
+            "doc_drift_flags": self.doc_drift_flags,
+            "domain_clusters": self.domain_clusters,
+            "day_one_answers": self.day_one_answers,
+        }
+
+        path = self.cache_dir / "semantic_index.json"
 
         with open(path, "w") as f:
             json.dump(output, f, indent=2)
 
-        logger.info(f"Semantic results saved → {path}")
+        logger.info(f"Semantic index saved → {path}")
+
+    def run(self):
+
+        logger.info("Starting Semanticist")
+
+        for module_path in list(self.module_data.keys())[:5]:
+
+            code = f"# Placeholder code for {module_path}"
+
+            docstring = self.module_data[module_path].get("docstring")
+
+            self.generate_purpose_statement(module_path, code, docstring)
+
+        if len(self.purpose_statements) >= 3:
+            self.cluster_into_domains()
+
+        self.save_semantic_index()
+
+        logger.info("Semanticist complete")
+
+        return {
+            "purpose_statements": self.purpose_statements,
+            "doc_drift_flags": self.doc_drift_flags,
+            "domain_clusters": self.domain_clusters,
+            "stats": self.stats,
+            "budget": self.budget.get_summary(),
+        }
