@@ -49,11 +49,11 @@ class Archivist:
         logger.debug(f"Trace logged: {action} by {agent}")
     
     def save_trace_log(self, output_path: Optional[Path] = None):
-        """Save trace log to JSONL file."""
+        """Save trace log to JSONL file with UTF-8 encoding."""
         if output_path is None:
             output_path = self.cache_dir / "cartography_trace.jsonl"
         
-        with open(output_path, 'w') as f:
+        with open(output_path, 'w', encoding='utf-8') as f:
             for entry in self.trace_log:
                 f.write(json.dumps(entry) + '\n')
         
@@ -76,22 +76,23 @@ class Archivist:
         content.append("## 🏗️ Architecture Overview")
         content.append("\n### Critical Modules (PageRank):")
         
-        if surveyor_data.get("graph"):
-            # Extract top modules by PageRank
-            import networkx as nx
-            from networkx.readwrite import json_graph
-            
-            G = json_graph.node_link_graph(surveyor_data["graph"])
+        # Safely handle graph data
+        if surveyor_data and surveyor_data.get("graph"):
             try:
+                from networkx.readwrite import json_graph
+                G = json_graph.node_link_graph(surveyor_data["graph"])
                 pagerank = nx.pagerank(G)
                 top_modules = sorted(pagerank.items(), key=lambda x: x[1], reverse=True)[:5]
                 for module, score in top_modules:
                     content.append(f"- `{module}` (importance: {score:.3f})")
             except:
                 content.append("- PageRank analysis unavailable")
+        else:
+            content.append("- No module graph available")
         
+        # Module counts
         content.append("\n### Module Counts:")
-        nodes = surveyor_data.get("nodes", {})
+        nodes = surveyor_data.get("nodes", {}) if surveyor_data else {}
         python_count = sum(1 for n in nodes.values() if n.get("language") == "python")
         sql_count = sum(1 for n in nodes.values() if n.get("language") == "sql")
         yaml_count = sum(1 for n in nodes.values() if n.get("language") == "yaml")
@@ -99,51 +100,70 @@ class Archivist:
         content.append(f"- Python modules: {python_count}")
         content.append(f"- SQL files: {sql_count}")
         content.append(f"- YAML configs: {yaml_count}")
+        content.append(f"- Total files: {len(nodes)}")
         
         # 2. Data Lineage
         content.append("\n## 🔄 Data Lineage")
         content.append("\n### Source Datasets (Ingestion Points):")
-        sources = lineage_data.get("sources", [])
-        for src in sources[:10]:
-            content.append(f"- `{src}`")
+        sources = lineage_data.get("sources", []) if lineage_data else []
+        if sources:
+            for src in sources[:10]:
+                content.append(f"- `{src}`")
+        else:
+            content.append("- No sources identified")
         
         content.append("\n### Sink Datasets (Final Outputs):")
-        sinks = lineage_data.get("sinks", [])
-        for sink in sinks[:10]:
-            content.append(f"- `{sink}`")
+        sinks = lineage_data.get("sinks", []) if lineage_data else []
+        if sinks:
+            for sink in sinks[:10]:
+                content.append(f"- `{sink}`")
+        else:
+            content.append("- No sinks identified")
+        
+        # Dataset counts
+        datasets = lineage_data.get("datasets", {}) if lineage_data else {}
+        content.append(f"\n### Dataset Statistics:")
+        content.append(f"- Total datasets: {len(datasets)}")
         
         # 3. Semantic Understanding
         content.append("\n## 🧠 Semantic Understanding")
         content.append("\n### Domain Clusters:")
         
-        domains = semantic_data.get("domain_clusters", {})
-        domain_groups = {}
-        for module, domain in domains.items():
-            if domain not in domain_groups:
-                domain_groups[domain] = []
-            domain_groups[domain].append(module)
-        
-        for domain, modules in domain_groups.items():
-            content.append(f"\n**{domain}**:")
-            for module in modules[:3]:  # Show first 3
-                content.append(f"- `{module}`")
-            if len(modules) > 3:
-                content.append(f"  *...and {len(modules)-3} more*")
+        domains = semantic_data.get("domain_clusters", {}) if semantic_data else {}
+        if domains:
+            domain_groups = {}
+            for module, domain in domains.items():
+                if domain not in domain_groups:
+                    domain_groups[domain] = []
+                domain_groups[domain].append(module)
+            
+            for domain, modules in domain_groups.items():
+                content.append(f"\n**{domain}** ({len(modules)} modules):")
+                for module in modules[:3]:
+                    content.append(f"- `{module}`")
+                if len(modules) > 3:
+                    content.append(f"  *...and {len(modules)-3} more*")
+        else:
+            content.append("- No domain clustering available")
         
         # 4. Documentation Health
         content.append("\n## 📝 Documentation Health")
         
-        drift_flags = semantic_data.get("doc_drift_flags", {})
+        drift_flags = semantic_data.get("doc_drift_flags", {}) if semantic_data else {}
         drift_modules = [m for m, drifted in drift_flags.items() if drifted]
         
         content.append(f"\n- Modules with documentation drift: {len(drift_modules)}")
         for module in drift_modules[:5]:
             content.append(f"  - ⚠️ `{module}`")
         
+        # Purpose statements
+        purposes = semantic_data.get("purpose_statements", {}) if semantic_data else {}
+        content.append(f"\n- Modules with purpose statements: {len(purposes)}")
+        
         # 5. Change Velocity
         content.append("\n## 📈 Change Velocity (Last 30 days)")
         
-        velocity = surveyor_data.get("metadata", {}).get("velocity_summary", {})
+        velocity = surveyor_data.get("metadata", {}).get("velocity_summary", {}) if surveyor_data else {}
         content.append(f"\n- Total changes: {velocity.get('total_changes_30d', 0)}")
         content.append(f"- Active files: {velocity.get('files_with_changes', 0)}")
         content.append(f"- Stale files: {velocity.get('stale_files', 0)}")
@@ -153,16 +173,17 @@ class Archivist:
         
         # Dead code candidates
         dead_code = []
-        for node_path, node_data in surveyor_data.get("nodes", {}).items():
-            if node_data.get("is_dead_code_candidate"):
-                dead_code.append(node_path)
+        if surveyor_data:
+            for node_path, node_data in surveyor_data.get("nodes", {}).items():
+                if node_data.get("is_dead_code_candidate"):
+                    dead_code.append(node_path)
         
         content.append(f"\n- Dead code candidates: {len(dead_code)}")
         for dc in dead_code[:5]:
             content.append(f"  - `{dc}`")
         
         # Circular dependencies
-        circular = surveyor_data.get("metadata", {}).get("stats", {}).get("circular_dependencies", 0)
+        circular = surveyor_data.get("metadata", {}).get("stats", {}).get("circular_dependencies", 0) if surveyor_data else 0
         content.append(f"- Circular dependencies: {circular}")
         
         # Join all content
@@ -184,12 +205,13 @@ class Archivist:
         # Executive Summary
         content.append("## Executive Summary")
         
-        datasets = lineage_data.get("datasets", {})
-        sources = lineage_data.get("sources", [])
-        sinks = lineage_data.get("sinks", [])
+        nodes = surveyor_data.get("nodes", {}) if surveyor_data else {}
+        datasets = lineage_data.get("datasets", {}) if lineage_data else {}
+        sources = lineage_data.get("sources", []) if lineage_data else []
+        sinks = lineage_data.get("sinks", []) if lineage_data else []
         
         content.append(f"\nThis codebase contains:")
-        content.append(f"- {len(surveyor_data.get('nodes', {}))} total files")
+        content.append(f"- {len(nodes)} total files")
         content.append(f"- {len(datasets)} datasets identified")
         content.append(f"- {len(sources)} source ingestion points")
         content.append(f"- {len(sinks)} final output datasets")
@@ -201,9 +223,9 @@ class Archivist:
             for src in sources[:5]:
                 # Find files that reference this source
                 files = []
-                for fname, finfo in datasets.items():
-                    if fname == src:
-                        files = finfo.get("files", [])
+                for dname, dinfo in datasets.items():
+                    if dname == src:
+                        files = dinfo.get("files", [])
                 content.append(f"\n   📥 `{src}`")
                 for f in files[:2]:
                     content.append(f"      └─ Used in: `{f}`")
@@ -217,7 +239,8 @@ class Archivist:
             for i, sink in enumerate(sinks[:5], 1):
                 # Find what produces this sink
                 producers = []
-                for trans_id, trans_info in lineage_data.get("transformations", {}).items():
+                transformations = lineage_data.get("transformations", {}) if lineage_data else {}
+                for trans_id, trans_info in transformations.items():
                     if sink in trans_info.get("writes", []):
                         producers.append(trans_info.get("file", "unknown"))
                 content.append(f"\n   {i}. `{sink}`")
@@ -234,7 +257,8 @@ class Archivist:
             
             # Find downstream dependents
             downstream = []
-            for trans_id, trans_info in lineage_data.get("transformations", {}).items():
+            transformations = lineage_data.get("transformations", {}) if lineage_data else {}
+            for trans_id, trans_info in transformations.items():
                 if most_critical in trans_info.get("reads", []):
                     downstream.append(trans_info.get("file", "unknown"))
             
@@ -244,12 +268,14 @@ class Archivist:
                     content.append(f"      └─ `{dep}`")
             else:
                 content.append("\n   No direct downstream dependencies (terminal node).")
+        else:
+            content.append("\nNo critical modules identified.")
         
         # Question 4: Business logic concentration
         content.append("\n## 4. Business Logic Concentration")
         
         # Use semantic data to identify business domains
-        domains = semantic_data.get("domain_clusters", {})
+        domains = semantic_data.get("domain_clusters", {}) if semantic_data else {}
         if domains:
             content.append("\nBusiness logic is concentrated in these domains:")
             domain_counts = {}
@@ -264,16 +290,17 @@ class Archivist:
         # Question 5: Change velocity
         content.append("\n## 5. Change Velocity (Last 90 Days)")
         
-        velocity = surveyor_data.get("metadata", {}).get("velocity_summary", {})
+        velocity = surveyor_data.get("metadata", {}).get("velocity_summary", {}) if surveyor_data else {}
         content.append(f"\n- Total changes: {velocity.get('total_changes_30d', 0)}")
         content.append(f"- Files with changes: {velocity.get('files_with_changes', 0)}")
         content.append(f"- Stale files (no changes): {velocity.get('stale_files', 0)}")
         
         # High-velocity files
         high_velocity = []
-        for node_path, node_data in surveyor_data.get("nodes", {}).items():
-            if node_data.get("change_velocity_30d", 0) > 0:
-                high_velocity.append((node_path, node_data.get("change_velocity_30d", 0)))
+        if surveyor_data:
+            for node_path, node_data in surveyor_data.get("nodes", {}).items():
+                if node_data.get("change_velocity_30d", 0) > 0:
+                    high_velocity.append((node_path, node_data.get("change_velocity_30d", 0)))
         
         if high_velocity:
             content.append("\n\n   Most frequently changed files:")
@@ -294,23 +321,25 @@ class Archivist:
                        surveyor_data: Dict,
                        lineage_data: Dict,
                        semantic_data: Dict):
-        """Generate and save all artifacts."""
+        """Generate and save all artifacts with proper UTF-8 encoding."""
         
         # Generate CODEBASE.md
         codebase_content = self.generate_codebase_md(surveyor_data, lineage_data, semantic_data)
         codebase_path = self.cache_dir / "CODEBASE.md"
-        with open(codebase_path, 'w') as f:
+        # Use UTF-8 encoding explicitly
+        with open(codebase_path, 'w', encoding='utf-8') as f:
             f.write(codebase_content)
         self.stats["artifacts_generated"] += 1
-        logger.info(f"📄 CODEBASE.md generated")
+        logger.info(f"📄 CODEBASE.md generated ({codebase_path.stat().st_size} bytes)")
         
         # Generate onboarding brief
         brief_content = self.generate_onboarding_brief(surveyor_data, lineage_data, semantic_data)
         brief_path = self.cache_dir / "onboarding_brief.md"
-        with open(brief_path, 'w') as f:
+        # Use UTF-8 encoding explicitly
+        with open(brief_path, 'w', encoding='utf-8') as f:
             f.write(brief_content)
         self.stats["artifacts_generated"] += 1
-        logger.info(f"📄 onboarding_brief.md generated")
+        logger.info(f"📄 onboarding_brief.md generated ({brief_path.stat().st_size} bytes)")
         
         # Save trace log
         self.save_trace_log()
