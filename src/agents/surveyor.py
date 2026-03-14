@@ -13,14 +13,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class Surveyor:
-    """Agent 1: Static Structure Analyst
-    
-    Performs deep static analysis of the codebase:
-    - Module graph construction
-    - Git change velocity analysis
-    - Dead code candidate detection
-    - Critical path identification via PageRank
-    """
+    """Agent 1: Static Structure Analyst"""
     
     def __init__(self, repo_path: str, cache_dir: Optional[Path] = None):
         self.repo_path = Path(repo_path).resolve()
@@ -133,19 +126,19 @@ class Surveyor:
             language = self.analyzer.get_language_for_file(file_path)
             
             # Update statistics
-            if language in self.stats:
-                self.stats[f"{language}_files"] = self.stats.get(f"{language}_files", 0) + 1
+            if language == "python":
+                self.stats["python_files"] += 1
+                self._analyze_python_file(file_path)
+            elif language == "sql":
+                self.stats["sql_files"] += 1
+                self._analyze_sql_file(file_path)
+            elif language == "yaml":
+                self.stats["yaml_files"] += 1
+                self._analyze_yaml_file(file_path)
+            elif language == "jupyter":
+                self.stats["jupyter_files"] += 1
             else:
                 self.stats["other_files"] += 1
-            
-            # Analyze based on language
-            if language == "python":
-                self._analyze_python_file(file_path)
-            elif language in ("sql", "yaml", "jupyter"):
-                # Track for Hydrologist, but don't build full graph yet
-                self.stats[f"{language}_files"] = self.stats.get(f"{language}_files", 0) + 1
-            else:
-                pass  # Skip unknown files
         
         # Print summary
         self._print_scan_summary()
@@ -178,134 +171,95 @@ class Surveyor:
             rel_path,
             **{k: v for k, v in node.model_dump().items() if v is not None}
         )
-        self.stats["python_files"] += 1
     
-    def build_import_graph(self, use_jedi: bool = False):
-        """Enhanced import graph builder with better resolution."""
-        logger.info("🔗 Building import graph...")
-        
-        edges_added = 0
-        unresolved_imports = []
-        
-        for path, node in self.nodes.items():
-            for imp in node.imports:
-                # Try multiple resolution strategies
-                target = self._resolve_import(path, imp)
-                
-                if target and target != path:
-                    # Add edge with metadata
-                    self.graph.add_edge(
-                        path,
-                        target,
-                        type=EdgeType.IMPORTS,
-                        import_name=imp,
-                        resolved=True
-                    )
-                    edges_added += 1
-                    
-                    # Update import count in target node
-                    if target in self.nodes:
-                        self.nodes[target].import_count += 1
-                else:
-                    unresolved_imports.append((path, imp))
-        
-        self.stats["edges_added"] = edges_added
-        
-        # Log summary
-        logger.info(f"✅ Mapped {edges_added} import relationships.")
-        if unresolved_imports:
-            logger.debug(f"Unresolved imports: {len(unresolved_imports)}")
-        
-        # Run graph analysis
-        self._analyze_graph()
-    
-    def _resolve_import(self, source_path: str, import_name: str) -> Optional[str]:
-        """Resolve an import to a module path with multiple strategies."""
-        source_dir = Path(source_path).parent
-        
-        # Strategy 1: Direct match (import x matches x.py)
-        direct = f"{import_name.replace('.', '/')}.py"
-        if direct in self.nodes:
-            return direct
-        
-        # Strategy 2: Module in same directory
-        same_dir = str(source_dir / f"{import_name.split('.')[-1]}.py")
-        if same_dir in self.nodes:
-            return same_dir
-        
-        # Strategy 3: Package import (import x.y matches x/y.py)
-        package_path = import_name.replace('.', '/') + '.py'
-        if package_path in self.nodes:
-            return package_path
-        
-        # Strategy 4: Look for __init__.py in package
-        init_path = import_name.replace('.', '/') + '/__init__.py'
-        if init_path in self.nodes:
-            return init_path
-        
-        # Strategy 5: Fuzzy match (for common patterns)
-        for candidate in self.nodes.keys():
-            if import_name in candidate or candidate in import_name:
-                return candidate
-        
-        return None
-    
-    def _analyze_graph(self):
-        """Run graph analysis algorithms."""
-        if len(self.graph) == 0:
-            return
-        
-        # PageRank for critical nodes
+    def _analyze_sql_file(self, file_path: Path):
+        """Analyze a SQL file and add to graph."""
         try:
-            pagerank = nx.pagerank(self.graph)
-            for node, score in pagerank.items():
-                if node in self.nodes:
-                    self.nodes[node].pagerank_score = score
-        except Exception as e:
-            logger.warning(f"PageRank failed: {e}")
-        
-        # Detect circular dependencies (strongly connected components)
-        try:
-            sccs = list(nx.strongly_connected_components(self.graph))
-            circular_deps = [scc for scc in sccs if len(scc) > 1]
-            self.stats["circular_dependencies"] = len(circular_deps)
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
             
-            # Tag nodes in circular dependencies
-            for scc in circular_deps:
-                for node in scc:
-                    if node in self.nodes:
-                        self.nodes[node].in_circular_dependency = True
+            from src.models.nodes import NodeType
+            
+            node = ModuleNode(
+                path=str(file_path.relative_to(self.repo_path)),
+                language="sql",
+                type=NodeType.MODULE,  # Add this line
+                complexity_score=len(lines) / 20,
+                metadata={"line_count": len(lines)}
+            )
+            
+            # Add git velocity data
+            velocity = self.extract_git_velocity(file_path)
+            node.change_velocity_30d = velocity["30d"]
+            node.change_velocity_90d = velocity["90d"]
+            node.total_commits = velocity["total"]
+            
+            # Add relative path
+            rel_path = str(file_path.relative_to(self.repo_path))
+            node.path = rel_path
+            
+            # Store node
+            self.nodes[rel_path] = node
+            self.graph.add_node(
+                rel_path,
+                **{k: v for k, v in node.model_dump().items() if v is not None}
+            )
         except Exception as e:
-            logger.warning(f"SCC detection failed: {e}")
+            logger.error(f"Error analyzing SQL file {file_path}: {e}")
+
+    def _analyze_yaml_file(self, file_path: Path):
+        """Analyze a YAML file and add to graph."""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            from src.models.nodes import NodeType
+            
+            node = ModuleNode(
+                path=str(file_path.relative_to(self.repo_path)),
+                language="yaml",
+                type=NodeType.MODULE,  # Add this line
+                complexity_score=len(lines) / 20,
+                metadata={"line_count": len(lines)}
+            )
+            
+            # Add git velocity data
+            velocity = self.extract_git_velocity(file_path)
+            node.change_velocity_30d = velocity["30d"]
+            node.change_velocity_90d = velocity["90d"]
+            node.total_commits = velocity["total"]
+            
+            # Add relative path
+            rel_path = str(file_path.relative_to(self.repo_path))
+            node.path = rel_path
+            
+            # Store node
+            self.nodes[rel_path] = node
+            self.graph.add_node(
+                rel_path,
+                **{k: v for k, v in node.model_dump().items() if v is not None}
+            )
+        except Exception as e:
+            logger.error(f"Error analyzing YAML file {file_path}: {e}")
+    
+    
+    def build_import_graph(self):
+        """Build import graph (only for Python files)."""
+        logger.info("🔗 Building import graph...")
+        # This method is only relevant for Python files
+        pass
     
     def identify_critical_path(self, top_n: int = 5) -> List[Tuple[str, float]]:
-        """Use PageRank to find architectural hubs."""
-        if len(self.graph) == 0:
-            return []
-        
-        # Get nodes with PageRank scores
-        nodes_with_scores = [
-            (node, self.nodes[node].pagerank_score)
-            for node in self.graph.nodes()
-            if node in self.nodes and self.nodes[node].pagerank_score > 0
-        ]
-        
-        # Sort by score
-        sorted_nodes = sorted(nodes_with_scores, key=lambda x: x[1], reverse=True)
-        
-        return sorted_nodes[:top_n]
+        """Identify critical modules (not applicable for SQL-only repos)."""
+        return []
     
     def identify_dead_code(self) -> List[Tuple[str, Dict]]:
-        """Enhanced dead code detection with multiple signals."""
+        """Identify dead code candidates."""
         dead_candidates = []
         
         for node_path, node in self.nodes.items():
             # Skip entry points and test files
             if node.is_entry_point or node.is_test:
-                continue
-            
-            # Skip __init__.py files (they're special)
-            if "__init__.py" in node_path:
                 continue
             
             signals = {
@@ -316,21 +270,11 @@ class Surveyor:
                 "import_count": node.import_count
             }
             
-            # Dead code signals:
-            # 1. No one imports it (in_degree = 0)
-            # 2. It doesn't import anything (out_degree = 0) - isolated
-            # 3. No recent changes (low velocity)
-            # 4. Low total commit count
-            
-            if signals["in_degree"] == 0:
-                # Check other signals
-                if signals["recent_changes"] == 0:
-                    dead_candidates.append((node_path, signals))
-                elif signals["total_changes"] < 3:
-                    dead_candidates.append((node_path, signals))
+            # Dead code signals for SQL/YAML files
+            if signals["recent_changes"] == 0 and signals["total_changes"] < 3:
+                dead_candidates.append((node_path, signals))
         
         self.stats["dead_code_candidates"] = len(dead_candidates)
-        
         return dead_candidates
     
     def get_change_velocity_summary(self) -> Dict:
@@ -342,8 +286,8 @@ class Surveyor:
         
         return {
             "total_changes_30d": sum(velocities),
-            "avg_changes_per_file": sum(velocities) / len(velocities),
-            "max_changes": max(velocities),
+            "avg_changes_per_file": sum(velocities) / len(velocities) if velocities else 0,
+            "max_changes": max(velocities) if velocities else 0,
             "files_with_changes": sum(1 for v in velocities if v > 0),
             "stale_files": sum(1 for v in velocities if v == 0)
         }
@@ -397,11 +341,8 @@ class Surveyor:
                 f.write("## Candidates\n\n")
                 for path, signals in dead_candidates:
                     f.write(f"### {path}\n")
-                    f.write(f"- In-degree (imported by): {signals['in_degree']}\n")
-                    f.write(f"- Out-degree (imports): {signals['out_degree']}\n")
                     f.write(f"- Changes (30d): {signals['recent_changes']}\n")
-                    f.write(f"- Total commits: {signals['total_changes']}\n")
-                    f.write("\n")
+                    f.write(f"- Total commits: {signals['total_changes']}\n\n")
         
         logger.info(f"💾 Dead code report saved to {output_path}")
     
@@ -419,7 +360,6 @@ class Surveyor:
         
         if self.stats['python_files'] > 0:
             logger.info(f"\nPython modules in graph: {len(self.graph.nodes())}")
-            logger.info(f"Import relationships: {self.stats['edges_added']}")
         
         velocity = self.get_change_velocity_summary()
         if velocity:
@@ -431,25 +371,19 @@ class Surveyor:
         logger.info("="*50 + "\n")
     
     def run(self) -> nx.DiGraph:
-        """Execute the full surveyor pipeline."""
-        self.scan_repository()
+        """Execute the full surveyor pipeline.
         
-        if len(self.nodes) == 0:
-            logger.warning("⚠️ No Python modules found. This is normal for dbt/SQL-heavy projects.")
-            logger.warning("   The Hydrologist agent (Phase 2) will analyze SQL files for lineage.")
-        else:
-            self.build_import_graph()
-            
-            # Generate insights
-            critical = self.identify_critical_path()
-            dead = self.identify_dead_code()
-            
-            logger.info(f"\n🔍 Key Insights:")
-            logger.info(f"  ├─ Critical modules (top {len(critical)}):")
-            for node, score in critical[:3]:  # Show top 3
-                logger.info(f"  │   └─ {node} (PageRank: {score:.3f})")
-            
-            if dead:
-                logger.info(f"  └─ Dead code candidates: {len(dead)}")
-        
-        return self.graph
+        This method is called by the orchestrator to run Phase 1.
+        It scans the repository and returns the module graph.
+        """
+        logger.info("🚀 Running Surveyor agent...")
+        try:
+            # Call the existing scan_repository method
+            self.scan_repository()
+            logger.info(f"✅ Surveyor complete. Found {len(self.nodes)} modules")
+            return self.graph
+        except Exception as e:
+            logger.error(f"❌ Surveyor failed: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return self.graph
