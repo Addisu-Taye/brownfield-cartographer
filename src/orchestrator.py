@@ -176,15 +176,15 @@ class Orchestrator:
             
             module_path = self.cache_dir / "module_graph.json"
             if module_path.exists():
-                with open(module_path) as f:
+                with open(module_path, 'r', encoding='utf-8') as f:
                     surveyor_data = json.load(f)
             
             lineage_path = self.cache_dir / "lineage_graph.json"
             if lineage_path.exists():
-                with open(lineage_path) as f:
+                with open(lineage_path, 'r', encoding='utf-8') as f:
                     lineage_data = json.load(f)
             
-            # Run semanticist
+            # Run semanticist - pass data as arguments
             semantic_results = self.semanticist.run(surveyor_data, lineage_data)
             
             # Log trace
