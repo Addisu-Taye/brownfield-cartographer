@@ -1,5 +1,5 @@
 """Navigator Agent - Query Interface for Knowledge Graph
-
+Addisu Taye
 A LangGraph agent with tools for querying the codebase knowledge graph.
 """
 
