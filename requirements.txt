@@ -1,0 +1,9 @@
+# LLM and ML dependencies
+openai>=1.0.0
+sentence-transformers>=2.2.0
+scikit-learn>=1.0.0
+numpy>=1.24.0
+
+# LangGraph (optional)
+langgraph>=0.0.20
+langchain>=0.1.0
