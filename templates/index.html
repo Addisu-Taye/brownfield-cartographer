@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brownfield Cartographer</title>
+    
+    <!-- Bootstrap CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    
+    <!-- Plotly -->
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    
+    <style>
+        :root {
+            --primary-color: #6366f1;
+            --secondary-color: #8b5cf6;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --dark-bg: #1e293b;
+            --light-bg: #f8fafc;
+        }
+        
+        body {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+        }
+        
+        .navbar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            box-shadow: 0 2px 20px rgba(0,0,0,0.1);
+        }
+        
+        .navbar-brand {
+            font-weight: 700;
+            color: var(--primary-color) !important;
+            font-size: 1.5rem;
+        }
+        
+        .main-container {
+            padding: 2rem;
+            max-width: 1600px;
+            margin: 0 auto;
+        }
+        
+        .card {
+            background: white;
+            border-radius: 20px;
+            border: none;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+            transition: transform 0.3s, box-shadow 0.3s;
+            margin-bottom: 1.5rem;
+            overflow: hidden;
+        }
+        
+        .card:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 20px 60px rgba(0,0,0,0.15);
+        }
+        
+        .card-header {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            padding: 1.2rem 1.5rem;
+            border: none;
+            font-weight: 600;
+            font-size: 1.2rem;
+        }
+        
+        .card-header i {
+            margin-right: 0.5rem;
+        }
+        
+        .card-body {
+            padding: 1.5rem;
+        }
+        
+        .repo-input {
+            background: white;
+            border-radius: 50px;
+            padding: 0.5rem;
+            box-shadow: 0 5px 20px rgba(0,0,0,0.1);
+        }
+        
+        .repo-input input {
+            border: none;
+            padding: 0.8rem 1.5rem;
+            width: 100%;
+            border-radius: 50px;
+            font-size: 1rem;
+        }
+        
+        .repo-input input:focus {
+            outline: none;
+            box-shadow: 0 0 0 2px var(--primary-color);
+        }
+        
+        .repo-input button {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            padding: 0.8rem 2rem;
+            border-radius: 50px;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+        
+        .repo-input button:hover {
+            background: var(--secondary-color);
+            transform: scale(1.05);
+        }
+        
+        .phase-btn {
+            background: white;
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 1rem;
+            font-weight: 600;
+            transition: all 0.3s;
+            width: 100%;
+            margin: 0.25rem 0;
+        }
+        
+        .phase-btn:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            transform: translateY(-2px);
+        }
+        
+        .phase-btn.active {
+            background: var(--primary-color);
+            border-color: var(--primary-color);
+            color: white;
+        }
+        
+        .phase-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border-radius: 15px;
+            padding: 1.5rem;
+            text-align: center;
+        }
+        
+        .stat-value {
+            font-size: 2.5rem;
+            font-weight: 700;
+        }
+        
+        .stat-label {
+            font-size: 0.9rem;
+            opacity: 0.9;
+        }
+        
+        .badge-phase {
+            padding: 0.5rem 1rem;
+            border-radius: 50px;
+            font-weight: 500;
+        }
+        
+        .badge-phase.completed {
+            background: var(--success-color);
+            color: white;
+        }
+        
+        .badge-phase.pending {
+            background: #e2e8f0;
+            color: #64748b;
+        }
+        
+        .query-box {
+            background: #f8fafc;
+            border-radius: 15px;
+            padding: 1rem;
+            margin-top: 1rem;
+        }
+        
+        .query-input {
+            border: 2px solid #e2e8f0;
+            border-radius: 12px;
+            padding: 0.8rem;
+            width: 100%;
+            transition: all 0.3s;
+        }
+        
+        .query-input:focus {
+            outline: none;
+            border-color: var(--primary-color);
+            box-shadow: 0 0 0 3px rgba(99,102,241,0.1);
+        }
+        
+        .result-box {
+            background: #1e293b;
+            color: #e2e8f0;
+            border-radius: 12px;
+            padding: 1rem;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9rem;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+        
+        .artifact-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+        
+        .artifact-list li {
+            padding: 0.8rem;
+            border-bottom: 1px solid #e2e8f0;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        
+        .artifact-list li:last-child {
+            border-bottom: none;
+        }
+        
+        .artifact-link {
+            color: var(--primary-color);
+            text-decoration: none;
+            flex: 1;
+            font-weight: 500;
+        }
+        
+        .artifact-link:hover {
+            color: var(--secondary-color);
+            text-decoration: underline;
+        }
+        
+        .loading-spinner {
+            display: inline-block;
+            width: 1rem;
+            height: 1rem;
+            border: 2px solid #e2e8f0;
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 0.6s linear infinite;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        .alert {
+            border-radius: 12px;
+            border: none;
+            padding: 1rem;
+        }
+        
+        .toast-container {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            z-index: 9999;
+        }
+        
+        .toast {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin-bottom: 0.5rem;
+            min-width: 300px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navigation -->
+    <nav class="navbar navbar-expand-lg">
+        <div class="container">
+            <a class="navbar-brand" href="#">
+                <i class="fas fa-map"></i>
+                Brownfield Cartographer
+            </a>
+            <div class="ms-auto">
+                <span class="badge bg-light text-dark p-2">
+                    <i class="fas fa-code-branch me-2"></i>
+                    v1.0.0
+                </span>
+            </div>
+        </div>
+    </nav>
+    
+    <!-- Toast Container for Notifications -->
+    <div class="toast-container" id="toastContainer"></div>
+    
+    <!-- Main Container -->
+    <div class="main-container">
+        <!-- Repository Input -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <i class="fas fa-folder-open"></i>
+                Repository
+            </div>
+            <div class="card-body">
+                <div class="repo-input d-flex">
+                    <input type="text" id="repoPath" class="form-control" 
+                           placeholder="Enter repository path (e.g., jaffle_shop)" value="jaffle_shop">
+                    <button class="btn ms-2" onclick="loadRepo()">
+                        <i class="fas fa-cloud-upload-alt me-2"></i>
+                        Load
+                    </button>
+                </div>
+                <div class="mt-3" id="repoStatus"></div>
+            </div>
+        </div>
+        
+        <!-- Analysis Phases -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <button class="phase-btn" id="phase1Btn" onclick="runPhase('1')">
+                    <i class="fas fa-search me-2"></i>
+                    Phase 1: Surveyor
+                </button>
+            </div>
+            <div class="col-md-3">
+                <button class="phase-btn" id="phase2Btn" onclick="runPhase('2')">
+                    <i class="fas fa-water me-2"></i>
+                    Phase 2: Hydrologist
+                </button>
+            </div>
+            <div class="col-md-3">
+                <button class="phase-btn" id="phase3Btn" onclick="runPhase('3')">
+                    <i class="fas fa-brain me-2"></i>
+                    Phase 3: Semanticist
+                </button>
+            </div>
+            <div class="col-md-3">
+                <button class="phase-btn" id="phase4Btn" onclick="runPhase('4')">
+                    <i class="fas fa-archive me-2"></i>
+                    Phase 4: Archivist
+                </button>
+            </div>
+        </div>
+        
+        <!-- Dashboard -->
+        <div class="row">
+            <!-- Left Column -->
+            <div class="col-md-4">
+                <!-- Status Card -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-chart-pie"></i>
+                        Analysis Status
+                    </div>
+                    <div class="card-body">
+                        <div class="row g-3" id="statusCards">
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="stat-value" id="phase1Status">⏳</div>
+                                    <div class="stat-label">Phase 1</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="stat-value" id="phase2Status">⏳</div>
+                                    <div class="stat-label">Phase 2</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="stat-value" id="phase3Status">⏳</div>
+                                    <div class="stat-label">Phase 3</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="stat-card">
+                                    <div class="stat-value" id="phase4Status">⏳</div>
+                                    <div class="stat-label">Phase 4</div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <hr class="my-4">
+                        
+                        <h6 class="fw-bold mb-3">Statistics</h6>
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between">
+                                <span>Modules</span>
+                                <span class="fw-bold" id="statModules">0</span>
+                            </div>
+                            <div class="progress" style="height: 6px;">
+                                <div class="progress-bar bg-primary" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between">
+                                <span>Datasets</span>
+                                <span class="fw-bold" id="statDatasets">0</span>
+                            </div>
+                            <div class="progress" style="height: 6px;">
+                                <div class="progress-bar bg-success" style="width: 0%"></div>
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between">
+                                <span>Purpose Statements</span>
+                                <span class="fw-bold" id="statPurposes">0</span>
+                            </div>
+                            <div class="progress" style="height: 6px;">
+                                <div class="progress-bar bg-info" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Artifacts Card -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <i class="fas fa-file-alt"></i>
+                        Generated Artifacts
+                    </div>
+                    <div class="card-body">
+                        <ul class="artifact-list" id="artifactsList">
+                            <li class="text-muted text-center py-3">
+                                <i class="fas fa-spinner fa-spin me-2"></i>
+                                Loading artifacts...
+                            </li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Middle Column -->
+            <div class="col-md-5">
+                <!-- Lineage Visualization -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-project-diagram"></i>
+                        Lineage Visualization
+                    </div>
+                    <div class="card-body">
+                        <div class="mb-3">
+                            <select class="form-select" id="datasetSelect" onchange="showLineage()">
+                                <option value="">Select a dataset...</option>
+                            </select>
+                        </div>
+                        <div id="lineagePlot" style="height: 400px;">
+                            <div class="text-center text-muted py-5">
+                                <i class="fas fa-chart-line fa-3x mb-3"></i>
+                                <p>Select a dataset to visualize its lineage</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Quick Stats -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <i class="fas fa-bolt"></i>
+                        Quick Stats
+                    </div>
+                    <div class="card-body">
+                        <div class="row text-center">
+                            <div class="col-4">
+                                <h3 class="text-primary" id="quickSources">0</h3>
+                                <small class="text-muted">Sources</small>
+                            </div>
+                            <div class="col-4">
+                                <h3 class="text-success" id="quickSinks">0</h3>
+                                <small class="text-muted">Sinks</small>
+                            </div>
+                            <div class="col-4">
+                                <h3 class="text-info" id="quickTransformations">0</h3>
+                                <small class="text-muted">Transformations</small>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Right Column -->
+            <div class="col-md-3">
+                <!-- Query Interface -->
+                <div class="card">
+                    <div class="card-header">
+                        <i class="fas fa-robot"></i>
+                        AI Query Interface
+                    </div>
+                    <div class="card-body">
+                        <div class="query-box">
+                            <div class="mb-3">
+                                <input type="text" class="query-input" id="queryInput" 
+                                       placeholder="Ask a question...">
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button class="btn btn-primary flex-grow-1" onclick="runQuery()">
+                                    <i class="fas fa-paper-plane me-2"></i>
+                                    Ask
+                                </button>
+                                <button class="btn btn-outline-secondary" onclick="clearQuery()">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                            
+                            <div class="mt-3">
+                                <small class="text-muted">Examples:</small>
+                                <div class="mt-2">
+                                    <button class="btn btn-sm btn-outline-primary me-1 mb-1" 
+                                            onclick="setQuery('find customer logic')">
+                                        find customer logic
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary me-1 mb-1" 
+                                            onclick="setQuery('trace lineage of customers')">
+                                        trace customers
+                                    </button>
+                                    <button class="btn btn-sm btn-outline-primary me-1 mb-1" 
+                                            onclick="setQuery('explain models/customers.sql')">
+                                        explain customers.sql
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="result-box mt-3" id="queryResult">
+                            <i class="fas fa-terminal me-2"></i>
+                            Enter a query to see results...
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- LLM Cost Card -->
+                <div class="card mt-4">
+                    <div class="card-header">
+                        <i class="fas fa-coins"></i>
+                        LLM Usage
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Calls:</span>
+                            <span class="fw-bold" id="llmCalls">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between mb-2">
+                            <span>Tokens:</span>
+                            <span class="fw-bold" id="llmTokens">0</span>
+                        </div>
+                        <div class="d-flex justify-content-between">
+                            <span>Cost:</span>
+                            <span class="fw-bold text-success" id="llmCost">$0.0000</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        let currentRepo = 'jaffle_shop';
+        let autoRefresh = true;
+        
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            loadRepo();
+            setInterval(updateStatus, 30000); // Auto-refresh every 30 seconds
+        });
+        
+        function showToast(message, type = 'info') {
+            const toastContainer = document.getElementById('toastContainer');
+            const toastId = 'toast-' + Date.now();
+            
+            const colors = {
+                success: '#10b981',
+                error: '#ef4444',
+                warning: '#f59e0b',
+                info: '#6366f1'
+            };
+            
+            const html = `
+                <div id="${toastId}" class="toast" role="alert" style="border-left: 4px solid ${colors[type]}">
+                    <div class="toast-body d-flex justify-content-between align-items-center">
+                        <span>${message}</span>
+                        <button type="button" class="btn-close" onclick="document.getElementById('${toastId}').remove()"></button>
+                    </div>
+                </div>
+            `;
+            
+            toastContainer.insertAdjacentHTML('beforeend', html);
+            const toast = document.getElementById(toastId);
+            setTimeout(() => toast.remove(), 5000);
+        }
+        
+        function loadRepo() {
+            currentRepo = document.getElementById('repoPath').value.trim();
+            
+            if (!currentRepo) {
+                showToast('Please enter a repository path', 'error');
+                return;
+            }
+            
+            fetch('/api/repos', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({repo_path: currentRepo})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    showToast(`Repository loaded: ${currentRepo}`, 'success');
+                    updateStatus();
+                    loadDatasets();
+                }
+            })
+            .catch(err => {
+                showToast('Failed to load repository: ' + err, 'error');
+            });
+        }
+        
+        function updateStatus() {
+            if (!currentRepo) return;
+            
+            fetch(`/api/status/${encodeURIComponent(currentRepo)}`)
+                .then(res => res.json())
+                .then(data => {
+                    updatePhaseStatus(data);
+                    updateStats(data);
+                    updateArtifacts(data.artifacts);
+                    updateLLMUsage(data.semanticist);
+                })
+                .catch(err => {
+                    console.error('Status update failed:', err);
+                });
+        }
+        
+        function updatePhaseStatus(data) {
+            const phases = ['phase1', 'phase2', 'phase3', 'phase4'];
+            
+            phases.forEach(phase => {
+                const completed = data.phases_completed?.includes(phase) || false;
+                document.getElementById(`${phase}Status`).textContent = completed ? '✅' : '⏳';
+                
+                const btn = document.getElementById(`${phase}Btn`);
+                if (btn) {
+                    btn.classList.toggle('active', completed);
+                    btn.disabled = completed;
+                }
+            });
+        }
+        
+        function updateStats(data) {
+            // Surveyor stats
+            const surveyor = data.surveyor || {};
+            document.getElementById('statModules').textContent = surveyor.nodes_count || 0;
+            
+            // Hydrologist stats
+            const hydrologist = data.hydrologist || {};
+            document.getElementById('statDatasets').textContent = hydrologist.datasets_count || 0;
+            document.getElementById('quickSources').textContent = (hydrologist.sources || []).length;
+            document.getElementById('quickSinks').textContent = (hydrologist.sinks || []).length;
+            document.getElementById('quickTransformations').textContent = hydrologist.transformations_count || 0;
+            
+            // Semanticist stats
+            const semanticist = data.semanticist || {};
+            document.getElementById('statPurposes').textContent = semanticist.purpose_statements || 0;
+            
+            // Update progress bars
+            updateProgressBars(data);
+        }
+        
+        function updateProgressBars(data) {
+            const surveyor = data.surveyor || {};
+            const hydrologist = data.hydrologist || {};
+            const semanticist = data.semanticist || {};
+            
+            const maxModules = 100;
+            const maxDatasets = 50;
+            const maxPurposes = 50;
+            
+            document.querySelectorAll('.progress-bar')[0].style.width = 
+                Math.min(100, (surveyor.nodes_count || 0) / maxModules * 100) + '%';
+            document.querySelectorAll('.progress-bar')[1].style.width = 
+                Math.min(100, (hydrologist.datasets_count || 0) / maxDatasets * 100) + '%';
+            document.querySelectorAll('.progress-bar')[2].style.width = 
+                Math.min(100, (semanticist.purpose_statements || 0) / maxPurposes * 100) + '%';
+        }
+        
+        function updateArtifacts(artifacts) {
+            const artifactsList = document.getElementById('artifactsList');
+            
+            if (!artifacts) {
+                artifactsList.innerHTML = '<li class="text-muted text-center py-3">No artifacts found</li>';
+                return;
+            }
+            
+            let html = '';
+            const artifactNames = [
+                'module_graph.json',
+                'lineage_graph.json',
+                'semantic_index.json',
+                'CODEBASE.md',
+                'onboarding_brief.md',
+                'cartography_trace.jsonl'
+            ];
+            
+            artifactNames.forEach(name => {
+                const exists = artifacts[name] || false;
+                html += `
+                    <li>
+                        <span class="badge ${exists ? 'bg-success' : 'bg-secondary'}">
+                            ${exists ? '✅' : '⏳'}
+                        </span>
+                        ${exists ? 
+                            `<a href="/api/artifact/${encodeURIComponent(currentRepo)}/${name}" 
+                                class="artifact-link" target="_blank">
+                                <i class="fas fa-download me-2"></i>${name}
+                            </a>` :
+                            `<span class="artifact-link text-muted">${name}</span>
+                        `}
+                    </li>
+                `;
+            });
+            
+            artifactsList.innerHTML = html;
+        }
+        
+        function updateLLMUsage(semanticist) {
+            if (!semanticist) return;
+            
+            document.getElementById('llmCalls').textContent = semanticist.llm_calls || 0;
+            document.getElementById('llmCost').textContent = `$${(semanticist.cost || 0).toFixed(4)}`;
+        }
+        
+        function runPhase(phase) {
+            const btn = document.getElementById(`phase${phase}Btn`);
+            const originalText = btn.innerHTML;
+            
+            btn.disabled = true;
+            btn.innerHTML = `<span class="loading-spinner me-2"></span>Running Phase ${phase}...`;
+            
+            fetch(`/api/analyze/${encodeURIComponent(currentRepo)}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({phase: phase})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) {
+                    showToast(data.error, 'error');
+                } else {
+                    showToast(`Phase ${phase} completed successfully!`, 'success');
+                    updateStatus();
+                    if (phase === '2' || phase === 'all') {
+                        loadDatasets();
+                    }
+                }
+            })
+            .catch(err => {
+                showToast('Failed to run phase: ' + err, 'error');
+            })
+            .finally(() => {
+                btn.disabled = false;
+                btn.innerHTML = originalText;
+            });
+        }
+        
+        function loadDatasets() {
+            fetch(`/api/datasets/${encodeURIComponent(currentRepo)}`)
+                .then(res => res.json())
+                .then(data => {
+                    const select = document.getElementById('datasetSelect');
+                    let options = '<option value="">Select a dataset...</option>';
+                    
+                    data.datasets.forEach(d => {
+                        options += `<option value="${d.name}">${d.name} (${d.type})</option>`;
+                    });
+                    
+                    select.innerHTML = options;
+                })
+                .catch(err => {
+                    console.error('Failed to load datasets:', err);
+                });
+        }
+        
+        function showLineage() {
+            const dataset = document.getElementById('datasetSelect').value;
+            if (!dataset) return;
+            
+            document.getElementById('lineagePlot').innerHTML = 
+                '<div class="text-center py-5"><div class="loading-spinner me-2"></div>Loading lineage...</div>';
+            
+            fetch(`/api/lineage/${encodeURIComponent(currentRepo)}/${dataset}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.error) {
+                        document.getElementById('lineagePlot').innerHTML = 
+                            `<div class="alert alert-danger">${data.error}</div>`;
+                    } else {
+                        Plotly.newPlot('lineagePlot', data.data, data.layout);
+                    }
+                })
+                .catch(err => {
+                    document.getElementById('lineagePlot').innerHTML = 
+                        `<div class="alert alert-danger">${err}</div>`;
+                });
+        }
+        
+        function runQuery() {
+            const question = document.getElementById('queryInput').value.trim();
+            if (!question) {
+                showToast('Please enter a question', 'warning');
+                return;
+            }
+            
+            document.getElementById('queryResult').innerHTML = 
+                '<div><span class="loading-spinner me-2"></span>Thinking...</div>';
+            
+            fetch(`/api/query/${encodeURIComponent(currentRepo)}`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({question: question})
+            })
+            .then(res => res.json())
+            .then(data => {
+                document.getElementById('queryResult').innerHTML = 
+                    '<pre class="mb-0">' + JSON.stringify(data, null, 2) + '</pre>';
+            })
+            .catch(err => {
+                document.getElementById('queryResult').innerHTML = 
+                    `<div class="alert alert-danger">${err}</div>`;
+            });
+        }
+        
+        function setQuery(query) {
+            document.getElementById('queryInput').value = query;
+            runQuery();
+        }
+        
+        function clearQuery() {
+            document.getElementById('queryInput').value = '';
+            document.getElementById('queryResult').innerHTML = 
+                '<i class="fas fa-terminal me-2"></i>Enter a query to see results...';
+        }
+        
+        // Load initial data
+        loadRepo();
+    </script>
+</body>
+</html>
