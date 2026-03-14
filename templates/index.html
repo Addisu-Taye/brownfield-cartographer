@@ -273,6 +273,18 @@
             box-shadow: 0 10px 30px rgba(0,0,0,0.2);
             margin-bottom: 0.5rem;
             min-width: 300px;
+            animation: slideIn 0.3s ease;
+        }
+        
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
         }
     </style>
 </head>
@@ -305,13 +317,37 @@
                 Repository
             </div>
             <div class="card-body">
-                <div class="repo-input d-flex">
-                    <input type="text" id="repoPath" class="form-control" 
-                           placeholder="Enter repository path (e.g., jaffle_shop)" value="jaffle_shop">
-                    <button class="btn ms-2" onclick="loadRepo()">
-                        <i class="fas fa-cloud-upload-alt me-2"></i>
-                        Load
-                    </button>
+                <div class="row">
+                    <div class="col-md-8">
+                        <div class="repo-input d-flex">
+                            <input type="text" id="repoPath" class="form-control" 
+                                   placeholder="Enter repository path (e.g., jaffle_shop, ../airflow, C:\projects\repo)" 
+                                   value="jaffle_shop">
+                            <button class="btn ms-2" onclick="loadRepo()">
+                                <i class="fas fa-cloud-upload-alt me-2"></i>
+                                Load
+                            </button>
+                        </div>
+                        <div class="mt-2 text-muted small">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Examples: <code>jaffle_shop</code> (relative), <code>C:\Users\name\projects\repo</code> (absolute)
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="btn-group w-100">
+                            <button class="btn btn-outline-secondary" onclick="browseFolder()">
+                                <i class="fas fa-folder-open me-2"></i>
+                                Browse
+                            </button>
+                            <button class="btn btn-outline-secondary" onclick="useCurrentDirectory()">
+                                <i class="fas fa-terminal me-2"></i>
+                                Current Dir
+                            </button>
+                            <button class="btn btn-outline-info" onclick="testPath()" title="Test if path exists">
+                                <i class="fas fa-check-circle"></i>
+                            </button>
+                        </div>
+                    </div>
                 </div>
                 <div class="mt-3" id="repoStatus"></div>
             </div>
@@ -413,6 +449,12 @@
                                 <div class="progress-bar bg-info" style="width: 0%"></div>
                             </div>
                         </div>
+                        <div class="mb-2">
+                            <div class="d-flex justify-content-between">
+                                <span>LLM Cost</span>
+                                <span class="fw-bold" id="llmCost">$0.0000</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
                 
@@ -442,10 +484,13 @@
                         Lineage Visualization
                     </div>
                     <div class="card-body">
-                        <div class="mb-3">
-                            <select class="form-select" id="datasetSelect" onchange="showLineage()">
+                        <div class="mb-3 d-flex gap-2">
+                            <select class="form-select" id="datasetSelect" onchange="showLineage()" disabled>
                                 <option value="">Select a dataset...</option>
                             </select>
+                            <button class="btn btn-outline-primary" onclick="loadDatasets()" title="Refresh datasets">
+                                <i class="fas fa-sync-alt"></i>
+                            </button>
                         </div>
                         <div id="lineagePlot" style="height: 400px;">
                             <div class="text-center text-muted py-5">
@@ -530,28 +575,6 @@
                         </div>
                     </div>
                 </div>
-                
-                <!-- LLM Cost Card -->
-                <div class="card mt-4">
-                    <div class="card-header">
-                        <i class="fas fa-coins"></i>
-                        LLM Usage
-                    </div>
-                    <div class="card-body">
-                        <div class="d-flex justify-content-between mb-2">
-                            <span>Calls:</span>
-                            <span class="fw-bold" id="llmCalls">0</span>
-                        </div>
-                        <div class="d-flex justify-content-between mb-2">
-                            <span>Tokens:</span>
-                            <span class="fw-bold" id="llmTokens">0</span>
-                        </div>
-                        <div class="d-flex justify-content-between">
-                            <span>Cost:</span>
-                            <span class="fw-bold text-success" id="llmCost">$0.0000</span>
-                        </div>
-                    </div>
-                </div>
             </div>
         </div>
     </div>
@@ -559,11 +582,12 @@
     <script>
         let currentRepo = 'jaffle_shop';
         let autoRefresh = true;
+        let refreshInterval;
         
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             loadRepo();
-            setInterval(updateStatus, 30000); // Auto-refresh every 30 seconds
+            refreshInterval = setInterval(updateStatus, 30000); // Auto-refresh every 30 seconds
         });
         
         function showToast(message, type = 'info') {
@@ -577,10 +601,17 @@
                 info: '#6366f1'
             };
             
+            const bgColors = {
+                success: '#d1fae5',
+                error: '#fee2e2',
+                warning: '#ffedd5',
+                info: '#e0e7ff'
+            };
+            
             const html = `
-                <div id="${toastId}" class="toast" role="alert" style="border-left: 4px solid ${colors[type]}">
+                <div id="${toastId}" class="toast" role="alert" style="border-left: 4px solid ${colors[type]}; background: ${bgColors[type]}">
                     <div class="toast-body d-flex justify-content-between align-items-center">
-                        <span>${message}</span>
+                        <span><i class="fas fa-${type === 'success' ? 'check-circle' : type === 'error' ? 'exclamation-circle' : 'info-circle'} me-2"></i>${message}</span>
                         <button type="button" class="btn-close" onclick="document.getElementById('${toastId}').remove()"></button>
                     </div>
                 </div>
@@ -588,7 +619,94 @@
             
             toastContainer.insertAdjacentHTML('beforeend', html);
             const toast = document.getElementById(toastId);
-            setTimeout(() => toast.remove(), 5000);
+            setTimeout(() => {
+                if (toast) toast.remove();
+            }, 5000);
+        }
+        
+        function browseFolder() {
+            // Create a hidden file input for directory selection
+            const fileInput = document.createElement('input');
+            fileInput.type = 'file';
+            fileInput.webkitdirectory = true;
+            fileInput.directory = true;
+            fileInput.multiple = true;
+            fileInput.style.display = 'none';
+            
+            fileInput.addEventListener('change', function(e) {
+                if (fileInput.files.length > 0) {
+                    const firstFile = fileInput.files[0];
+                    let path = firstFile.webkitRelativePath || firstFile.name;
+                    
+                    // Extract the root directory name
+                    const parts = path.split('/');
+                    if (parts.length > 0) {
+                        const dirName = parts[0];
+                        
+                        // On Windows, we need to construct a path
+                        if (navigator.platform && navigator.platform.indexOf('Win') > -1) {
+                            // Try to get the full path from the file
+                            if (firstFile.path) {
+                                // Some browsers expose the full path
+                                const fullPath = firstFile.path.substring(0, firstFile.path.lastIndexOf('\\'));
+                                document.getElementById('repoPath').value = fullPath;
+                                showToast('Please verify the path and click Load', 'info');
+                            } else {
+                                // Fallback - just use the folder name
+                                document.getElementById('repoPath').value = dirName;
+                                showToast('Enter full path like: C:\\Users\\name\\projects\\' + dirName, 'info');
+                            }
+                        } else {
+                            // On Mac/Linux, we can use the directory name
+                            document.getElementById('repoPath').value = './' + dirName;
+                            setTimeout(() => loadRepo(), 500);
+                        }
+                    }
+                }
+                document.body.removeChild(fileInput);
+            });
+            
+            document.body.appendChild(fileInput);
+            fileInput.click();
+        }
+        
+        function useCurrentDirectory() {
+            fetch('/api/current-directory')
+                .then(res => res.json())
+                .then(data => {
+                    if (data.path) {
+                        document.getElementById('repoPath').value = data.path;
+                        loadRepo();
+                    }
+                })
+                .catch(err => {
+                    showToast('Could not detect current directory', 'error');
+                });
+        }
+        
+        function testPath() {
+            const path = document.getElementById('repoPath').value.trim();
+            if (!path) {
+                showToast('Please enter a path to test', 'warning');
+                return;
+            }
+            
+            fetch('/api/test-path', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({path: path})
+            })
+            .then(res => res.json())
+            .then(data => {
+                if (data.exists) {
+                    showToast(`✅ Path exists: ${data.absolute_path}`, 'success');
+                } else {
+                    showToast(`❌ Path does not exist: ${path}`, 'error');
+                }
+            })
+            .catch(err => {
+                showToast('Error testing path: ' + err, 'error');
+            });
         }
         
         function loadRepo() {
@@ -609,9 +727,11 @@
                 if (data.error) {
                     showToast(data.error, 'error');
                 } else {
-                    showToast(`Repository loaded: ${currentRepo}`, 'success');
+                    showToast(`Repository loaded: ${data.repo_path}`, 'success');
                     updateStatus();
                     loadDatasets();
+                    loadModules();
+                    loadSemantic();
                 }
             })
             .catch(err => {
@@ -628,7 +748,6 @@
                     updatePhaseStatus(data);
                     updateStats(data);
                     updateArtifacts(data.artifacts);
-                    updateLLMUsage(data.semanticist);
                 })
                 .catch(err => {
                     console.error('Status update failed:', err);
@@ -644,8 +763,13 @@
                 
                 const btn = document.getElementById(`${phase}Btn`);
                 if (btn) {
-                    btn.classList.toggle('active', completed);
-                    btn.disabled = completed;
+                    if (completed) {
+                        btn.classList.add('active');
+                        btn.disabled = true;
+                    } else {
+                        btn.classList.remove('active');
+                        btn.disabled = false;
+                    }
                 }
             });
         }
@@ -665,6 +789,7 @@
             // Semanticist stats
             const semanticist = data.semanticist || {};
             document.getElementById('statPurposes').textContent = semanticist.purpose_statements || 0;
+            document.getElementById('llmCost').textContent = `$${(semanticist.cost || 0).toFixed(4)}`;
             
             // Update progress bars
             updateProgressBars(data);
@@ -679,19 +804,20 @@
             const maxDatasets = 50;
             const maxPurposes = 50;
             
-            document.querySelectorAll('.progress-bar')[0].style.width = 
-                Math.min(100, (surveyor.nodes_count || 0) / maxModules * 100) + '%';
-            document.querySelectorAll('.progress-bar')[1].style.width = 
-                Math.min(100, (hydrologist.datasets_count || 0) / maxDatasets * 100) + '%';
-            document.querySelectorAll('.progress-bar')[2].style.width = 
-                Math.min(100, (semanticist.purpose_statements || 0) / maxPurposes * 100) + '%';
+            const moduleProgress = Math.min(100, (surveyor.nodes_count || 0) / maxModules * 100);
+            const datasetProgress = Math.min(100, (hydrologist.datasets_count || 0) / maxDatasets * 100);
+            const purposeProgress = Math.min(100, (semanticist.purpose_statements || 0) / maxPurposes * 100);
+            
+            document.querySelectorAll('.progress-bar')[0].style.width = moduleProgress + '%';
+            document.querySelectorAll('.progress-bar')[1].style.width = datasetProgress + '%';
+            document.querySelectorAll('.progress-bar')[2].style.width = purposeProgress + '%';
         }
         
         function updateArtifacts(artifacts) {
             const artifactsList = document.getElementById('artifactsList');
             
-            if (!artifacts) {
-                artifactsList.innerHTML = '<li class="text-muted text-center py-3">No artifacts found</li>';
+            if (!artifacts || Object.keys(artifacts).length === 0) {
+                artifactsList.innerHTML = '<li class="text-muted text-center py-3">No artifacts found - run phases first</li>';
                 return;
             }
             
@@ -702,23 +828,24 @@
                 'semantic_index.json',
                 'CODEBASE.md',
                 'onboarding_brief.md',
-                'cartography_trace.jsonl'
+                'cartography_trace.jsonl',
+                'dead_code_candidates.md'
             ];
             
             artifactNames.forEach(name => {
                 const exists = artifacts[name] || false;
+                const icon = exists ? 'fa-check-circle text-success' : 'fa-hourglass-half text-warning';
                 html += `
                     <li>
-                        <span class="badge ${exists ? 'bg-success' : 'bg-secondary'}">
-                            ${exists ? '✅' : '⏳'}
-                        </span>
+                        <i class="fas ${icon}"></i>
                         ${exists ? 
                             `<a href="/api/artifact/${encodeURIComponent(currentRepo)}/${name}" 
-                                class="artifact-link" target="_blank">
+                                class="artifact-link" target="_blank" title="Download ${name}">
                                 <i class="fas fa-download me-2"></i>${name}
                             </a>` :
                             `<span class="artifact-link text-muted">${name}</span>
                         `}
+                        ${exists ? `<span class="badge bg-success">✅</span>` : `<span class="badge bg-secondary">⏳</span>`}
                     </li>
                 `;
             });
@@ -726,12 +853,126 @@
             artifactsList.innerHTML = html;
         }
         
-        function updateLLMUsage(semanticist) {
-            if (!semanticist) return;
-            
-            document.getElementById('llmCalls').textContent = semanticist.llm_calls || 0;
-            document.getElementById('llmCost').textContent = `$${(semanticist.cost || 0).toFixed(4)}`;
+        function loadModules() {
+            fetch(`/api/modules/${encodeURIComponent(currentRepo)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.modules !== undefined) {
+                        document.getElementById('statModules').textContent = data.modules;
+                    }
+                })
+                .catch(err => console.error('Failed to load modules:', err));
         }
+        
+        function loadSemantic() {
+            fetch(`/api/semantic/${encodeURIComponent(currentRepo)}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.stats) {
+                        document.getElementById('statPurposes').textContent = data.stats.purpose_statements || 0;
+                        document.getElementById('llmCost').textContent = `$${(data.stats.cost || 0).toFixed(4)}`;
+                    }
+                })
+                .catch(err => console.error('Failed to load semantic data:', err));
+        }
+        
+        function loadDatasets() {
+    if (!currentRepo) {
+        console.error('No repository selected');
+        return;
+    }
+    
+    console.log('Loading datasets for repo:', currentRepo);
+    
+    fetch(`/api/datasets/${encodeURIComponent(currentRepo)}`)
+        .then(res => {
+            if (!res.ok) {
+                throw new Error(`HTTP error! status: ${res.status}`);
+            }
+            return res.json();
+        })
+        .then(data => {
+            console.log('Datasets received:', data);
+            
+            const select = document.getElementById('datasetSelect');
+            if (!select) return;
+            
+            // Clear existing options
+            select.innerHTML = '';
+            
+            // Add default option
+            const defaultOption = document.createElement('option');
+            defaultOption.value = '';
+            defaultOption.textContent = 'Select a dataset...';
+            select.appendChild(defaultOption);
+            
+            // Check if we have datasets
+            if (data.datasets && data.datasets.length > 0) {
+                // Sort datasets: sources first, then sinks, then others
+                const sources = data.sources || [];
+                const sinks = data.sinks || [];
+                
+                const sortedDatasets = [...data.datasets].sort((a, b) => {
+                    // Sources first
+                    if (sources.includes(a.name) && !sources.includes(b.name)) return -1;
+                    if (!sources.includes(a.name) && sources.includes(b.name)) return 1;
+                    // Then sinks
+                    if (sinks.includes(a.name) && !sinks.includes(b.name)) return -1;
+                    if (!sinks.includes(a.name) && sinks.includes(b.name)) return 1;
+                    // Then alphabetically
+                    return a.name.localeCompare(b.name);
+                });
+                
+                sortedDatasets.forEach(d => {
+                    const option = document.createElement('option');
+                    option.value = d.name;
+                    
+                    // Add icon based on type
+                    let icon = '📄';
+                    if (data.sources?.includes(d.name)) icon = '📤';
+                    if (data.sinks?.includes(d.name)) icon = '📥';
+                    
+                    option.textContent = `${icon} ${d.name} (${d.type})`;
+                    select.appendChild(option);
+                });
+                
+                // Update quick stats
+                document.getElementById('quickSources').textContent = data.sources?.length || 0;
+                document.getElementById('quickSinks').textContent = data.sinks?.length || 0;
+                document.getElementById('statDatasets').textContent = data.datasets.length;
+                
+                // Enable the select
+                select.disabled = false;
+                
+                console.log(`Loaded ${data.datasets.length} datasets`);
+                showToast(`Loaded ${data.datasets.length} datasets`, 'success');
+            } else {
+                // No datasets found
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'No datasets found - run Phase 2 first';
+                select.appendChild(option);
+                select.disabled = true;
+                
+                console.log('No datasets found');
+            }
+        })
+        .catch(err => {
+            console.error('Failed to load datasets:', err);
+            
+            const select = document.getElementById('datasetSelect');
+            if (select) {
+                select.innerHTML = '';
+                const option = document.createElement('option');
+                option.value = '';
+                option.textContent = 'Error loading datasets';
+                select.appendChild(option);
+                select.disabled = true;
+            }
+            
+            showToast('Failed to load datasets: ' + err.message, 'error');
+        });
+}
         
         function runPhase(phase) {
             const btn = document.getElementById(`phase${phase}Btn`);
@@ -752,8 +993,20 @@
                 } else {
                     showToast(`Phase ${phase} completed successfully!`, 'success');
                     updateStatus();
-                    if (phase === '2' || phase === 'all') {
-                        loadDatasets();
+                    
+                    // Load datasets after Phase 2 or full analysis
+                    if (phase === '2' || phase === '4' || phase === 'all') {
+                        console.log('Phase 2/4/all complete, loading datasets...');
+                        setTimeout(() => {
+                            loadDatasets();
+                            loadModules();
+                            loadSemantic();
+                        }, 1000); // Small delay to ensure files are written
+                    }
+                    
+                    // Load semantic data after Phase 3
+                    if (phase === '3' || phase === 'all') {
+                        setTimeout(() => loadSemantic(), 1000);
                     }
                 }
             })
@@ -764,24 +1017,6 @@
                 btn.disabled = false;
                 btn.innerHTML = originalText;
             });
-        }
-        
-        function loadDatasets() {
-            fetch(`/api/datasets/${encodeURIComponent(currentRepo)}`)
-                .then(res => res.json())
-                .then(data => {
-                    const select = document.getElementById('datasetSelect');
-                    let options = '<option value="">Select a dataset...</option>';
-                    
-                    data.datasets.forEach(d => {
-                        options += `<option value="${d.name}">${d.name} (${d.type})</option>`;
-                    });
-                    
-                    select.innerHTML = options;
-                })
-                .catch(err => {
-                    console.error('Failed to load datasets:', err);
-                });
         }
         
         function showLineage() {
@@ -844,8 +1079,12 @@
                 '<i class="fas fa-terminal me-2"></i>Enter a query to see results...';
         }
         
-        // Load initial data
-        loadRepo();
+        // Clean up on page unload
+        window.addEventListener('beforeunload', function() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        });
     </script>
 </body>
 </html>

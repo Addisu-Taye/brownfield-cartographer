@@ -51,6 +51,34 @@ def index():
     return render_template('index.html')
 
 
+@app.route('/api/current-directory')
+def get_current_directory():
+    """Get the current working directory."""
+    try:
+        cwd = os.getcwd()
+        return jsonify({'path': cwd})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/test-path', methods=['POST'])
+def test_path():
+    """Test if a path exists."""
+    data = request.json
+    path = data.get('path', '')
+    
+    try:
+        p = Path(path).expanduser().resolve()
+        exists = p.exists()
+        return jsonify({
+            'exists': exists,
+            'absolute_path': str(p),
+            'is_dir': p.is_dir() if exists else False
+        })
+    except Exception as e:
+        return jsonify({'error': str(e), 'exists': False}), 400
+
+
 @app.route('/api/repos', methods=['POST'])
 def add_repo():
     """Add a repository to analyze."""
@@ -59,6 +87,14 @@ def add_repo():
     
     if not repo_path:
         return jsonify({'error': 'Repository path is required'}), 400
+    
+    # Handle relative paths
+    if not os.path.isabs(repo_path):
+        # Try relative to current directory
+        base_path = Path.cwd()
+        full_path = base_path / repo_path
+        if full_path.exists():
+            repo_path = str(full_path)
     
     repo_path = Path(repo_path).resolve()
     if not repo_path.exists():
@@ -118,6 +154,29 @@ def get_status(repo_path):
     
     try:
         status = orchestrator.get_status()
+        
+        # Ensure all required fields exist
+        if 'surveyor' not in status:
+            status['surveyor'] = {'nodes_count': 0, 'stats': {}}
+        if 'hydrologist' not in status:
+            status['hydrologist'] = {
+                'datasets': {},
+                'sources': [],
+                'sinks': [],
+                'datasets_count': 0,
+                'transformations_count': 0
+            }
+        if 'semanticist' not in status:
+            status['semanticist'] = {
+                'purpose_statements': 0,
+                'doc_drift_count': 0,
+                'domains': 0,
+                'llm_calls': 0,
+                'cost': 0.0
+            }
+        if 'artifacts' not in status:
+            status['artifacts'] = {}
+            
         return jsonify(status)
     except Exception as e:
         logger.error(f"Status check failed: {e}")
@@ -145,6 +204,153 @@ def query_repo(repo_path):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/datasets/<path:repo_path>')
+def get_datasets(repo_path):
+    """Get all datasets from lineage graph."""
+    orchestrator = get_orchestrator(repo_path)
+    if not orchestrator:
+        return jsonify({'error': 'Failed to initialize orchestrator', 'datasets': [], 'sources': [], 'sinks': []}), 500
+    
+    try:
+        # Try to load lineage graph directly
+        lineage_path = Path(repo_path) / '.cartography' / 'lineage_graph.json'
+        datasets_dict = {}
+        sources = []
+        sinks = []
+        
+        if lineage_path.exists():
+            with open(lineage_path, 'r', encoding='utf-8') as f:
+                lineage_data = json.load(f)
+                datasets_dict = lineage_data.get('datasets', {})
+                sources = lineage_data.get('sources', [])
+                sinks = lineage_data.get('sinks', [])
+                logger.info(f"Direct load: Found {len(datasets_dict)} datasets")
+        else:
+            # Fallback to orchestrator status
+            status = orchestrator.get_status()
+            hydrologist = status.get('hydrologist', {})
+            datasets_dict = hydrologist.get('datasets', {})
+            sources = hydrologist.get('sources', [])
+            sinks = hydrologist.get('sinks', [])
+            logger.info(f"Orchestrator: Found {len(datasets_dict)} datasets")
+        
+        datasets = []
+        for name, info in datasets_dict.items():
+            datasets.append({
+                'name': name,
+                'type': info.get('type', 'unknown'),
+                'files': info.get('files', [])
+            })
+        
+        # Sort datasets by name
+        datasets = sorted(datasets, key=lambda x: x['name'])
+        
+        response_data = {
+            'datasets': datasets,
+            'sources': sources,
+            'sinks': sinks,
+            'count': len(datasets)
+        }
+        
+        logger.info(f"Returning {len(datasets)} datasets")
+        return jsonify(response_data)
+        
+    except Exception as e:
+        logger.error(f"Failed to get datasets: {e}")
+        return jsonify({'error': str(e), 'datasets': [], 'sources': [], 'sinks': []}), 500
+
+
+@app.route('/api/modules/<path:repo_path>')
+def get_modules(repo_path):
+    """Get all modules from surveyor."""
+    orchestrator = get_orchestrator(repo_path)
+    if not orchestrator:
+        return jsonify({'error': 'Failed to initialize orchestrator'}), 500
+    
+    try:
+        # Try to load module graph directly
+        module_path = Path(repo_path) / '.cartography' / 'module_graph.json'
+        
+        if module_path.exists():
+            with open(module_path, 'r', encoding='utf-8') as f:
+                module_data = json.load(f)
+                nodes = module_data.get('nodes', {})
+                
+                python_count = sum(1 for n in nodes.values() if n.get('language') == 'python')
+                sql_count = sum(1 for n in nodes.values() if n.get('language') == 'sql')
+                yaml_count = sum(1 for n in nodes.values() if n.get('language') == 'yaml')
+                
+                return jsonify({
+                    'modules': len(nodes),
+                    'python_files': python_count,
+                    'sql_files': sql_count,
+                    'yaml_files': yaml_count,
+                    'nodes': nodes
+                })
+        else:
+            # Fallback to orchestrator status
+            status = orchestrator.get_status()
+            surveyor = status.get('surveyor', {})
+            
+            return jsonify({
+                'modules': surveyor.get('nodes_count', 0),
+                'python_files': surveyor.get('stats', {}).get('python_files', 0),
+                'sql_files': surveyor.get('stats', {}).get('sql_files', 0),
+                'yaml_files': surveyor.get('stats', {}).get('yaml_files', 0)
+            })
+    except Exception as e:
+        logger.error(f"Failed to get modules: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/semantic/<path:repo_path>')
+def get_semantic(repo_path):
+    """Get semantic analysis results."""
+    orchestrator = get_orchestrator(repo_path)
+    if not orchestrator:
+        return jsonify({'error': 'Failed to initialize orchestrator'}), 500
+    
+    try:
+        # Try to load semantic index directly
+        semantic_path = Path(repo_path) / '.cartography' / 'semantic_index.json'
+        
+        if semantic_path.exists():
+            with open(semantic_path, 'r', encoding='utf-8') as f:
+                full_semantic = json.load(f)
+                
+            purposes = full_semantic.get('purpose_statements', {})
+            domains = full_semantic.get('domain_clusters', {})
+            drift = full_semantic.get('doc_drift_flags', {})
+            stats = full_semantic.get('metadata', {}).get('stats', {})
+            
+            return jsonify({
+                'stats': {
+                    'purpose_statements': len(purposes),
+                    'doc_drift_count': len([d for d in drift.values() if d]),
+                    'domains': len(set(domains.values())),
+                    'llm_calls': stats.get('llm_calls', 0),
+                    'cost': stats.get('total_cost', 0)
+                },
+                'purposes': purposes,
+                'domains': domains,
+                'drift': drift
+            })
+        else:
+            # Fallback to orchestrator status
+            status = orchestrator.get_status()
+            semantic = status.get('semanticist', {})
+            
+            return jsonify({
+                'stats': semantic,
+                'purposes': {},
+                'domains': {},
+                'drift': {}
+            })
+    except Exception as e:
+        logger.error(f"Failed to get semantic data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/api/lineage/<path:repo_path>/<dataset>')
 def get_lineage_viz(repo_path, dataset):
     """Get lineage visualization data for a dataset."""
@@ -153,51 +359,62 @@ def get_lineage_viz(repo_path, dataset):
         return jsonify({'error': 'Failed to initialize orchestrator'}), 500
     
     try:
-        # Get lineage data
-        upstream_result = orchestrator.query(f"trace lineage of {dataset} upstream")
-        downstream_result = orchestrator.query(f"trace lineage of {dataset} downstream")
+        # Load the lineage graph directly
+        lineage_path = Path(repo_path) / '.cartography' / 'lineage_graph.json'
+        if not lineage_path.exists():
+            return jsonify({'error': 'Lineage graph not found'}), 404
         
-        # Extract paths
-        upstream_path = []
-        downstream_path = []
+        with open(lineage_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
         
-        if 'result' in upstream_result and 'path' in upstream_result['result']:
-            upstream_path = upstream_result['result']['path']
+        # Get the graph
+        graph_data = data.get('graph', {})
+        G = nx.node_link_graph(graph_data)
         
-        if 'result' in downstream_result and 'path' in downstream_result['result']:
-            downstream_path = downstream_result['result']['path']
+        # Find the dataset node
+        dataset_node = f"dataset:{dataset}"
+        if dataset_node not in G:
+            return jsonify({'error': f"Dataset '{dataset}' not found"}), 404
         
-        # Create graph visualization
-        G = nx.DiGraph()
+        # Find upstream (ancestors) and downstream (descendants)
+        upstream_nodes = []
+        downstream_nodes = []
         
-        # Add nodes and edges
-        all_nodes = set(upstream_path + downstream_path + [dataset])
-        for node in all_nodes:
-            G.add_node(node)
+        try:
+            # Get all ancestors (what feeds into this)
+            ancestors = nx.ancestors(G, dataset_node)
+            upstream_nodes = [n.replace('dataset:', '') for n in ancestors if n.startswith('dataset:')]
+            
+            # Get all descendants (what depends on this)
+            descendants = nx.descendants(G, dataset_node)
+            downstream_nodes = [n.replace('dataset:', '') for n in descendants if n.startswith('dataset:')]
+        except:
+            # Fallback for older networkx versions
+            pass
         
-        # Add edges for upstream (reverse direction for visualization)
-        for i in range(len(upstream_path) - 1):
-            G.add_edge(upstream_path[i + 1], upstream_path[i])
-        
-        # Add edges for downstream
-        for i in range(len(downstream_path) - 1):
-            G.add_edge(downstream_path[i], downstream_path[i + 1])
+        # Create a subgraph with relevant nodes
+        relevant_nodes = [dataset_node] + list(ancestors) + list(descendants)
+        H = G.subgraph(relevant_nodes)
         
         # Create Plotly figure
-        pos = nx.spring_layout(G, k=2, iterations=50)
+        if len(H.nodes) > 0:
+            pos = nx.spring_layout(H, k=2, iterations=50)
+        else:
+            pos = {}
         
         # Create edge trace
         edge_trace = []
-        for edge in G.edges():
-            x0, y0 = pos[edge[0]]
-            x1, y1 = pos[edge[1]]
-            edge_trace.append(go.Scatter(
-                x=[x0, x1, None],
-                y=[y0, y1, None],
-                line=dict(width=1, color='#888'),
-                hoverinfo='none',
-                mode='lines'
-            ))
+        for edge in H.edges():
+            if edge[0] in pos and edge[1] in pos:
+                x0, y0 = pos[edge[0]]
+                x1, y1 = pos[edge[1]]
+                edge_trace.append(go.Scatter(
+                    x=[x0, x1, None],
+                    y=[y0, y1, None],
+                    line=dict(width=1, color='#888'),
+                    hoverinfo='none',
+                    mode='lines'
+                ))
         
         # Create node trace
         node_x = []
@@ -205,38 +422,46 @@ def get_lineage_viz(repo_path, dataset):
         node_colors = []
         node_sizes = []
         node_text = []
+        node_hover = []
         
-        for node in G.nodes():
-            x, y = pos[node]
-            node_x.append(x)
-            node_y.append(y)
-            
-            # Color based on node type
-            if node == dataset:
-                node_colors.append('red')
-                node_sizes.append(30)
-                node_text.append(f"<b>{node}</b> (selected)")
-            elif node in upstream_path:
-                node_colors.append('lightblue')
-                node_sizes.append(20)
-                node_text.append(f"{node}<br>⬆️ Upstream")
-            elif node in downstream_path:
-                node_colors.append('lightgreen')
-                node_sizes.append(20)
-                node_text.append(f"{node}<br>⬇️ Downstream")
-            else:
-                node_colors.append('gray')
-                node_sizes.append(15)
-                node_text.append(node)
+        for node in H.nodes():
+            if node in pos:
+                x, y = pos[node]
+                node_x.append(x)
+                node_y.append(y)
+                
+                node_name = node.replace('dataset:', '')
+                
+                # Color based on node type
+                if node == dataset_node:
+                    node_colors.append('red')
+                    node_sizes.append(30)
+                    node_text.append(f"<b>{node_name}</b>")
+                    node_hover.append(f"{node_name}<br>(selected)")
+                elif node in ancestors:
+                    node_colors.append('lightblue')
+                    node_sizes.append(20)
+                    node_text.append(node_name)
+                    node_hover.append(f"{node_name}<br>⬆️ Upstream")
+                elif node in descendants:
+                    node_colors.append('lightgreen')
+                    node_sizes.append(20)
+                    node_text.append(node_name)
+                    node_hover.append(f"{node_name}<br>⬇️ Downstream")
+                else:
+                    node_colors.append('gray')
+                    node_sizes.append(15)
+                    node_text.append(node_name)
+                    node_hover.append(node_name)
         
         node_trace = go.Scatter(
             x=node_x,
             y=node_y,
             mode='markers+text',
-            text=list(G.nodes()),
+            text=node_text,
             textposition="top center",
             hoverinfo='text',
-            hovertext=node_text,
+            hovertext=node_hover,
             marker=dict(
                 size=node_sizes,
                 color=node_colors,
@@ -248,8 +473,10 @@ def get_lineage_viz(repo_path, dataset):
         fig = go.Figure(
             data=edge_trace + [node_trace],
             layout=go.Layout(
-                title=f'📊 Lineage Graph: {dataset}',
-                titlefont=dict(size=16),
+                title={
+                    'text': f'📊 Lineage Graph: {dataset}',
+                    'font': {'size': 16}
+                },
                 showlegend=False,
                 hovermode='closest',
                 margin=dict(b=20, l=5, r=5, t=40),
@@ -264,88 +491,6 @@ def get_lineage_viz(repo_path, dataset):
     except Exception as e:
         logger.error(f"Lineage visualization failed: {e}")
         return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/datasets/<path:repo_path>')
-def get_datasets(repo_path):
-    """Get all datasets from lineage graph."""
-    orchestrator = get_orchestrator(repo_path)
-    if not orchestrator:
-        return jsonify({'error': 'Failed to initialize orchestrator'}), 500
-    
-    try:
-        status = orchestrator.get_status()
-        hydrologist = status.get('hydrologist', {})
-        
-        datasets = []
-        for name, info in hydrologist.get('datasets', {}).items():
-            datasets.append({
-                'name': name,
-                'type': info.get('type', 'unknown'),
-                'files': info.get('files', [])
-            })
-        
-        return jsonify({
-            'datasets': sorted(datasets, key=lambda x: x['name']),
-            'sources': hydrologist.get('sources', []),
-            'sinks': hydrologist.get('sinks', [])
-        })
-    except Exception as e:
-        logger.error(f"Failed to get datasets: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/modules/<path:repo_path>')
-def get_modules(repo_path):
-    """Get all modules from surveyor."""
-    orchestrator = get_orchestrator(repo_path)
-    if not orchestrator:
-        return jsonify({'error': 'Failed to initialize orchestrator'}), 500
-    
-    try:
-        status = orchestrator.get_status()
-        surveyor = status.get('surveyor', {})
-        
-        return jsonify({
-            'modules': surveyor.get('nodes_count', 0),
-            'python_files': surveyor.get('stats', {}).get('python_files', 0),
-            'sql_files': surveyor.get('stats', {}).get('sql_files', 0),
-            'yaml_files': surveyor.get('stats', {}).get('yaml_files', 0)
-        })
-    except Exception as e:
-        logger.error(f"Failed to get modules: {e}")
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/semantic/<path:repo_path>')
-def get_semantic(repo_path):
-    """Get semantic analysis results."""
-    orchestrator = get_orchestrator(repo_path)
-    if not orchestrator:
-        return jsonify({'error': 'Failed to initialize orchestrator'}), 500
-    
-    try:
-        status = orchestrator.get_status()
-        semantic = status.get('semanticist', {})
-        
-        # Load full semantic index
-        semantic_path = Path(repo_path) / '.cartography' / 'semantic_index.json'
-        if semantic_path.exists():
-            with open(semantic_path, 'r', encoding='utf-8') as f:
-                full_semantic = json.load(f)
-        else:
-            full_semantic = {}
-        
-        return jsonify({
-            'stats': semantic,
-            'purposes': full_semantic.get('purpose_statements', {}),
-            'domains': full_semantic.get('domain_clusters', {}),
-            'drift': full_semantic.get('doc_drift_flags', {})
-        })
-    except Exception as e:
-        logger.error(f"Failed to get semantic data: {e}")
-        return jsonify({'error': str(e)}), 500
-
 
 @app.route('/api/artifact/<path:repo_path>/<artifact>')
 def get_artifact(repo_path, artifact):
@@ -363,10 +508,32 @@ def get_artifact(repo_path, artifact):
         if artifact_path.suffix.lower() not in allowed_extensions:
             return jsonify({'error': 'File type not allowed'}), 403
         
-        return send_file(artifact_path, as_attachment=True)
+        return send_file(artifact_path, as_attachment=True, download_name=safe_artifact)
         
     except Exception as e:
         logger.error(f"Failed to get artifact: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/debug/lineage/<path:repo_path>')
+def debug_lineage(repo_path):
+    """Debug endpoint to check lineage data."""
+    try:
+        lineage_path = Path(repo_path) / '.cartography' / 'lineage_graph.json'
+        if not lineage_path.exists():
+            return jsonify({'error': 'Lineage graph not found'}), 404
+        
+        with open(lineage_path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        
+        return jsonify({
+            'exists': True,
+            'datasets_count': len(data.get('datasets', {})),
+            'datasets': list(data.get('datasets', {}).keys()),
+            'sources': data.get('sources', []),
+            'sinks': data.get('sinks', [])
+        })
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 
